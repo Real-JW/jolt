@@ -25,6 +25,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "aes-ex"
+version = "0.1.0"
+dependencies = [
+ "aes-guest",
+ "hex",
+ "jolt-sdk",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "aes-guest"
+version = "0.1.0"
+dependencies = [
+ "jolt-sdk",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
