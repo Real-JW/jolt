@@ -77,6 +77,11 @@ pub mod suffixes;
 
 pub mod and;
 pub mod andn;
+pub mod gate;
+pub use gate::GateLookupTable;
+pub mod sub_circuit;
+pub use sub_circuit::SubCircuitLut;
+
 pub mod equal;
 pub mod halfword_alignment;
 pub mod lower_half_word;

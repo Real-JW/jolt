@@ -25,18 +25,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "aes-ex"
+name = "aes-vm"
 version = "0.1.0"
 dependencies = [
- "aes-guest",
+ "aes-vm-guest",
  "hex",
  "jolt-sdk",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
-name = "aes-guest"
+name = "aes-vm-guest"
 version = "0.1.0"
 dependencies = [
  "jolt-sdk",
@@ -80,7 +80,7 @@ dependencies = [
  "alloc-guest",
  "jolt-sdk",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -114,6 +114,23 @@ name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
+
+[[package]]
+name = "and-chain"
+version = "0.1.0"
+dependencies = [
+ "and-chain-guest",
+ "jolt-sdk",
+ "tracing",
+ "tracing-subscriber 0.3.20",
+]
+
+[[package]]
+name = "and-chain-guest"
+version = "0.1.0"
+dependencies = [
+ "jolt-sdk",
+]
 
 [[package]]
 name = "android_system_properties"
@@ -193,6 +210,7 @@ source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#
 dependencies = [
  "ark-ec",
  "ark-ff",
+ "ark-r1cs-std",
  "ark-serialize",
  "ark-std",
 ]
@@ -283,6 +301,35 @@ dependencies = [
  "educe",
  "fnv",
  "hashbrown 0.15.5",
+]
+
+[[package]]
+name = "ark-r1cs-std"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "941551ef1df4c7a401de7068758db6503598e6f01850bdb2cfdb614a1f9dbea1"
+dependencies = [
+ "ark-ec",
+ "ark-ff",
+ "ark-relations",
+ "ark-std",
+ "educe",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "tracing",
+]
+
+[[package]]
+name = "ark-relations"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec46ddc93e7af44bcab5230937635b06fb5744464dd6a7e7b083e80ebd274384"
+dependencies = [
+ "ark-ff",
+ "ark-std",
+ "tracing",
+ "tracing-subscriber 0.2.25",
 ]
 
 [[package]]
@@ -484,6 +531,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bool-circuit-native"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "ark-serialize",
+ "jolt-core",
+]
+
+[[package]]
 name = "btreemap"
 version = "0.1.0"
 dependencies = [
@@ -491,7 +549,7 @@ dependencies = [
  "jolt-sdk",
  "spinners",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -687,7 +745,7 @@ dependencies = [
  "collatz-guest",
  "jolt-sdk",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -1177,7 +1235,7 @@ dependencies = [
  "fibonacci-guest",
  "jolt-sdk",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -1435,7 +1493,7 @@ dependencies = [
  "jolt-inlines-sha2",
  "jolt-sdk",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -2019,7 +2077,7 @@ dependencies = [
  "tracer",
  "tracing",
  "tracing-chrome",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -2293,7 +2351,7 @@ dependencies = [
  "jolt-sdk",
  "memory-ops-guest",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -2323,7 +2381,7 @@ dependencies = [
  "jolt-sdk",
  "merkle-tree-guest",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -2383,7 +2441,7 @@ dependencies = [
  "jolt-sdk",
  "muldiv-guest",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -2400,7 +2458,7 @@ dependencies = [
  "jolt-sdk",
  "multi-function-guest",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -2690,7 +2748,7 @@ dependencies = [
  "jolt-sdk",
  "overflow-guest",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -3121,7 +3179,7 @@ dependencies = [
  "jolt-sdk",
  "random-guest",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -3161,7 +3219,7 @@ dependencies = [
  "recover-ecdsa-guest",
  "secp256k1",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -3181,7 +3239,7 @@ dependencies = [
  "jolt-sdk",
  "postcard",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -3633,7 +3691,7 @@ dependencies = [
  "jolt-sdk",
  "sha2-chain-guest",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -3653,7 +3711,7 @@ dependencies = [
  "jolt-sdk",
  "sha2-guest",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -3683,7 +3741,7 @@ dependencies = [
  "jolt-sdk",
  "sha3-chain-guest",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -3703,7 +3761,7 @@ dependencies = [
  "jolt-sdk",
  "sha3-guest",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -3790,7 +3848,7 @@ dependencies = [
  "jolt-sdk",
  "stdlib-guest",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -4205,7 +4263,7 @@ dependencies = [
  "strum 0.26.3",
  "strum_macros 0.26.4",
  "tracing",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -4238,7 +4296,7 @@ checksum = "bf0a738ed5d6450a9fb96e86a23ad808de2b727fd1394585da5cdd6788ffe724"
 dependencies = [
  "serde_json",
  "tracing-core",
- "tracing-subscriber",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
@@ -4259,6 +4317,15 @@ checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
 dependencies = [
  "log",
  "once_cell",
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-subscriber"
+version = "0.2.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e0d2eaa99c3c2e41547cfa109e910a68ea03823cccad4a0525dcbc9b01e8c71"
+dependencies = [
  "tracing-core",
 ]
 

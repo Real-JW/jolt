@@ -2,4 +2,4 @@
 #![no_main]
 
 #[allow(unused_imports)]
-use aes_guest::*;
+use aes_vm_guest::*;

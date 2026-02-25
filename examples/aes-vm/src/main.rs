@@ -2,9 +2,15 @@ use std::time::Instant;
 use tracing::info;
 
 pub fn main() {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
+    // Number of AES encryptions to perform
+    let aes_count: u32 = 1;
 
     info!("Compiling AES guest program...");
+    info!("Number of AES encryptions: {}", aes_count);
     let target_dir = "/tmp/jolt-guest-targets";
     let mut program = guest::compile_aes_encrypt(target_dir);
 
@@ -36,15 +42,16 @@ pub fn main() {
     // Proving phase
     info!("Starting proof generation...");
     let prove_start = Instant::now();
-    let (ciphertext, proof, program_io) = prove_aes_encrypt(plaintext, key);
+    let (ciphertext, proof, program_io) = prove_aes_encrypt(plaintext, key, aes_count);
     let prove_time = prove_start.elapsed();
     info!("✓ Prover time: {:.3} seconds", prove_time.as_secs_f64());
+    info!("✓ Time per AES: {:.6} seconds", prove_time.as_secs_f64() / aes_count as f64);
     info!("");
 
     // Verification phase
     info!("Starting proof verification...");
     let verify_start = Instant::now();
-    let is_valid = verify_aes_encrypt(plaintext, key, ciphertext, program_io.panic, proof);
+    let is_valid = verify_aes_encrypt(plaintext, key, aes_count, ciphertext, program_io.panic, proof);
     let verify_time = verify_start.elapsed();
     info!("✓ Verifier time: {:.3} seconds", verify_time.as_secs_f64());
     info!("");

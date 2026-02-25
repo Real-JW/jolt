@@ -137,31 +137,34 @@ fn add_round_key(state: &mut [u8; 16], round_key: &[u32; 4]) {
     }
 }
 
-#[jolt::provable(memory_size = 65536, max_trace_length = 131072)]
-fn aes_encrypt(plaintext: [u8; 16], key: [u8; 16]) -> [u8; 16] {
+#[jolt::provable(memory_size = 65536, max_trace_length = 1048576)]
+fn aes_encrypt(plaintext: [u8; 16], key: [u8; 16], count: u32) -> [u8; 16] {
     let mut state = plaintext;
     let round_keys = key_expansion(&key);
     
-    // Initial round
-    add_round_key(&mut state, &[round_keys[0], round_keys[1], round_keys[2], round_keys[3]]);
-    
-    // Main rounds (9 rounds for AES-128)
-    for round in 1..10 {
+    // Run AES encryption 'count' times
+    for _ in 0..count {
+        // Initial round
+        add_round_key(&mut state, &[round_keys[0], round_keys[1], round_keys[2], round_keys[3]]);
+        
+        // Main rounds (9 rounds for AES-128)
+        for round in 1..10 {
+            sub_bytes(&mut state);
+            shift_rows(&mut state);
+            mix_columns(&mut state);
+            add_round_key(&mut state, &[
+                round_keys[round * 4],
+                round_keys[round * 4 + 1],
+                round_keys[round * 4 + 2],
+                round_keys[round * 4 + 3],
+            ]);
+        }
+        
+        // Final round (no MixColumns)
         sub_bytes(&mut state);
         shift_rows(&mut state);
-        mix_columns(&mut state);
-        add_round_key(&mut state, &[
-            round_keys[round * 4],
-            round_keys[round * 4 + 1],
-            round_keys[round * 4 + 2],
-            round_keys[round * 4 + 3],
-        ]);
+        add_round_key(&mut state, &[round_keys[40], round_keys[41], round_keys[42], round_keys[43]]);
     }
-    
-    // Final round (no MixColumns)
-    sub_bytes(&mut state);
-    shift_rows(&mut state);
-    add_round_key(&mut state, &[round_keys[40], round_keys[41], round_keys[42], round_keys[43]]);
     
     state
 }

@@ -1,5 +1,5 @@
 [package]
-name = "aes-ex"
+name = "aes-vm"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,5 +7,5 @@ edition = "2021"
 jolt-sdk = { path = "../../jolt-sdk", features = ["host"] }
 tracing-subscriber = "0.3"
 tracing = "0.1"
-guest = { package = "aes-guest", path = "./guest" }
+guest = { package = "aes-vm-guest", path = "./guest" }
 hex = "0.4.3"
