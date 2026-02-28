@@ -531,7 +531,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bool-circuit-native"
+name = "bool-lut"
 version = "0.1.0"
 dependencies = [
  "ark-bn254",
@@ -539,6 +539,8 @@ dependencies = [
  "ark-ff",
  "ark-serialize",
  "jolt-core",
+ "serde",
+ "serial_test",
 ]
 
 [[package]]

@@ -57,7 +57,7 @@ members = [
     "examples/alloc/guest",
     "examples/and-chain",
     "examples/and-chain/guest",
-    "examples/bool-circuit-native",
+    "examples/bool-lut",
     "examples/stdlib",
     "examples/stdlib/guest",
     "examples/muldiv",

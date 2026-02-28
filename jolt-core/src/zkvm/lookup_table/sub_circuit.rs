@@ -11,7 +11,7 @@
 //! Output bit j is stored at bit position j of `table[idx]`.
 //!
 //! MLE variable ordering is also LSB-first, consistent with the `init_eq` /
-//! `bind` helpers in `bool-circuit-native`.
+//! `bind` helpers in `bool-lut`.
 
 use crate::field::JoltField;
 
@@ -79,7 +79,7 @@ impl SubCircuitLut {
     /// `r ∈ F^k` using the standard O(2^k) fold algorithm (LSB-first).
     ///
     /// The algorithm folds variable 0 first (LSB), matching the convention in
-    /// `init_eq` / `bind` in `bool-circuit-native`.
+    /// `init_eq` / `bind` in `bool-lut`.
     pub fn evaluate_mle_at<F: JoltField>(&self, r: &[F], out_bit: usize) -> F {
         assert_eq!(r.len(), self.k, "SubCircuitLut::evaluate_mle_at: wrong r length");
         let n = 1usize << self.k;

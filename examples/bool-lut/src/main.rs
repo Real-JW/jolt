@@ -1,45 +1,15 @@
-//! **Non-Interactive Zero-Knowledge Proof for Boolean Gate Circuits**
+//! Edited0730
+//! NIZK for boolean gate circuits via HyperKZG + sumcheck.
 //!
-//! Uses Jolt's **HyperKZG polynomial commitment scheme** to turn a sumcheck-based
-//! gate-correctness argument into a full NIZK proof.  No RISC-V VM, no guest
-//! binary, no `#[jolt::provable]` macro.
-//!
-//! # Proof structure (per gate type τ with truth-table mask m)
-//!
-//! Given a trace of N = 2^k gate evaluations {(a_i, b_i, out_i)}, define:
-//!
-//!   A(x), B(x), Out(x) — multilinear extensions over {0,1}^k
-//!   T̃_τ(r_a, r_b)     — MLE of the 4-entry truth table for gate type τ
-//!
-//! **Prover:**
-//!  1. Commits to A, B, Out using HyperKZG → (C_A, C_B, C_Out)
-//!  2. Derives Fiat-Shamir challenge `r` from the commitments
-//!  3. Runs sumcheck proving  ∑ eq(r,x)·(Out(x) − T̃_m(A(x),B(x))) = 0
-//!  4. Opens A, B, Out at the sumcheck point `r_sc` with HyperKZG opening proofs
-//!
-//! **Verifier (never re-executes the circuit):**
-//!  1. Receives (C_A, C_B, C_Out, sumcheck proof, opening proofs, claimed outputs)
-//!  2. Replays Fiat-Shamir to derive the same challenges
-//!  3. Verifies the sumcheck round polynomials
-//!  4. Verifies the HyperKZG opening proofs: C_A → a_final, C_B → b_final, C_Out → out_final
-//!  5. Checks  eq(r, r_sc) · (out_final − T̃_m(a_final, b_final))  ==  last_claim
-//!
-//! # Security
-//!
-//! **Soundness**: binding polynomial commitments + sumcheck + Fiat-Shamir (random oracle).
-//! **Completeness**: correct gate evaluations always produce accepting proofs.
-//! **Zero-knowledge** (computational): the verifier never sees the raw trace;
-//!   all witness data is hidden behind HyperKZG commitments.
-//!
-//! # Usage
-//!
-//!   bool-circuit-native --tiny [input-bits] [--cycles N] [--show-pages]
-//!   bool-circuit-native <bytecode.czbc> [input-bits] [--cycles N] [--show-pages]
+//! Per gate type τ (mask m), the prover commits A, B, Out as MLEs, runs a
+//! sumcheck proving ∑ eq(r,x)·(Out(x)−T̃_m(A(x),B(x)))=0, then opens all
+//! three polynomials at the sumcheck point with HyperKZG.
+//! The verifier replays Fiat-Shamir and checks commitments — no circuit re-execution.
+//! Phase 4h path uses the unified mega-table LogUp prover from `lut_construct`.
 
-pub mod lczbc;
-pub mod lut_lasso;
-pub mod lut_mega_logup;
-pub mod lut_prover;
+pub mod lut_czbc;
+pub mod lut_construct;
+pub mod shout_lut;
 
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
@@ -52,6 +22,7 @@ use ark_bn254::{Bn254, Fr};
 use ark_ff::{Field, One, Zero};
 use jolt_core::field::JoltField;
 use jolt_core::poly::commitment::commitment_scheme::CommitmentScheme;
+use jolt_core::poly::commitment::dory::DoryGlobals;
 use jolt_core::poly::commitment::hyperkzg::{
     HyperKZG, HyperKZGCommitment, HyperKZGProof, HyperKZGProverKey, HyperKZGVerifierKey,
 };
@@ -59,18 +30,10 @@ use jolt_core::poly::multilinear_polynomial::MultilinearPolynomial;
 use jolt_core::transcripts::{AppendToTranscript, KeccakTranscript, Transcript};
 use jolt_core::zkvm::lookup_table::GateLookupTable;
 
-use lczbc::load_lut_circuit;
-use lut_lasso::{
-    compute_lasso_proof_size_bytes, compute_max_num_vars_lasso,
-    prove_lasso_lut_circuit, verify_lasso_lut_circuit,
-};
-use lut_mega_logup::{
+use lut_czbc::load_lut_circuit;
+use lut_construct::{
     compute_max_num_vars_mega, compute_mega_proof_size_bytes,
     prove_mega_logup_circuit, verify_mega_logup_circuit,
-};
-use lut_prover::{
-    compute_lut_proof_size_bytes, compute_max_num_vars_lut,
-    prove_lut_circuit, verify_lut_circuit,
 };
 
 /// Type alias for the PCS we use throughout.
@@ -874,12 +837,10 @@ pub fn verify_circuit(
 enum Mode {
     Tiny,
     Bytecode(PathBuf),
-    /// LUT-annotated circuit (.lczbc); uses the Phase 2 LUT (sumcheck) prover.
-    LutBytecode(PathBuf),
-    /// LUT-annotated circuit (.lczbc); uses the Phase 4b Lasso/LogUp prover.
-    LassoBytecode(PathBuf),
-    /// LUT-annotated circuit (.lczbc); uses the Phase 4h unified mega-table LogUp prover.
+    /// LUT-annotated circuit (.lczbc); uses the Phase 4h mega-table LogUp prover.
     MegaBytecode(PathBuf),
+    /// LUT-annotated circuit (.lczbc); uses the Shout (Phase S*) prover.
+    Shout(PathBuf),
 }
 
 fn print_usage(bin: &str) {
@@ -887,14 +848,12 @@ fn print_usage(bin: &str) {
     eprintln!("  {bin} --tiny [input-bits] [--cycles N] [--show-pages] [--bench-csv <file>]");
     eprintln!("  {bin} <bytecode.czbc>  [input-bits] [--cycles N] [--show-pages] [--bench-csv <file>]");
     eprintln!("  {bin} <circuit.lczbc>  [input-bits] [--cycles N] [--bench-csv <file>]");
-    eprintln!("  {bin} --lut    <circuit.lczbc> [input-bits] [--cycles N] [--bench-csv <file>]");
-    eprintln!("  {bin} --lasso  <circuit.lczbc> [input-bits] [--cycles N] [--bench-csv <file>]");
-    eprintln!("  {bin} --lut4h  <circuit.lczbc> [input-bits] [--cycles N] [--bench-csv <file>]");
+    eprintln!("  {bin} --lutBaseline  <circuit.lczbc> [input-bits] [--cycles N] [--bench-csv <file>]");
+    eprintln!("  {bin} --shout        <circuit.lczbc> [input-bits] [--cycles N] [--bench-csv <file>]");
     eprintln!();
     eprintln!("Flags:");
-    eprintln!("  --lut               Phase 2 LUT (sumcheck) prover — one sumcheck per LUT type.");
-    eprintln!("  --lasso             Phase 4b Lasso/LogUp prover — T independent grand-product arguments.");
-    eprintln!("  --lut4h             Phase 4h unified mega-table LogUp — single global argument.");
+    eprintln!("  --lutBaseline       Phase 4h mega-table LogUp prover (default for .lczbc).");
+    eprintln!("  --shout             Phase S* Shout-based LUT prover (work in progress).");
     eprintln!("  --bench-csv <file>  Append a CSV row with timing/size metrics to <file>.");
     eprintln!("                      Creates the file (with header) if it does not exist.");
     eprintln!("  --show-pages        Print the gate / LUT trace (gate mode only).");
@@ -926,32 +885,18 @@ fn main() {
     let mut cycles_override: Option<u32> = None;
     let mut show_pages = false;
     let mut bench_csv: Option<PathBuf> = None;
-    // --lut forces the Phase 2 LUT (sumcheck) prover.
-    let mut force_lut   = false;
-    // --lasso forces the Phase 4b Lasso/LogUp prover.
-    let mut force_lasso = false;
-    // --lut4h forces the Phase 4h unified mega-table LogUp prover.
     let mut force_mega  = false;
 
+    let mut force_shout  = false;
     let mut i = 1usize;
     while i < args.len() {
         match args[i].as_str() {
-            "--lut" => {
-                force_lut   = true;
-                force_lasso = false;
-                force_mega  = false;
-                i += 1;
-            }
-            "--lasso" => {
-                force_lasso = true;
-                force_lut   = false;
-                force_mega  = false;
-                i += 1;
-            }
-            "--lut4h" => {
+            "--lutBaseline" => {
                 force_mega  = true;
-                force_lut   = false;
-                force_lasso = false;
+                i += 1;
+            }
+            "--shout" => {
+                force_shout = true;
                 i += 1;
             }
             "--tiny" => {
@@ -988,20 +933,17 @@ fn main() {
             token => {
                 if mode.is_none() {
                     let p = PathBuf::from(token);
-                    let is_lczbc = force_lut || force_lasso || force_mega
+                    let is_lczbc = force_mega || force_shout
                         || p.extension().map(|e| e == "lczbc").unwrap_or(false);
-                    mode = Some(if force_mega && is_lczbc {
-                        Mode::MegaBytecode(p)
-                    } else if force_lasso && is_lczbc {
-                        Mode::LassoBytecode(p)
+                    mode = Some(if force_shout {
+                        Mode::Shout(p)
                     } else if is_lczbc {
-                        Mode::LutBytecode(p)
+                        Mode::MegaBytecode(p)
                     } else {
                         Mode::Bytecode(p)
                     });
-                    force_lut   = false;
-                    force_lasso = false;
                     force_mega  = false;
+                    force_shout = false;
                 } else if input_bits_raw.is_none() {
                     input_bits_raw = Some(token.to_string());
                 } else {
@@ -1012,149 +954,6 @@ fn main() {
                 i += 1;
             }
         }
-    }
-
-    // ── LUT prover path (Phase 2) ─────────────────────────────────────────────
-    if let Some(Mode::LutBytecode(ref p)) = mode {
-        let label = p.display().to_string();
-        let circ = load_lut_circuit(p)
-            .unwrap_or_else(|e| panic!("load {}: {e}", p.display()));
-
-        let input_bits: Vec<bool> = input_bits_raw
-            .as_deref()
-            .map(parse_bit_string)
-            .transpose()
-            .unwrap_or_else(|e| panic!("{e}"))
-            .unwrap_or_default();
-
-        let default_cycles = if circ.default_cycles == 0 { 1 } else { circ.default_cycles };
-        let cycles = cycles_override.unwrap_or(default_cycles).max(1);
-
-        let mut inputs = vec![false; circ.primary_inputs.len()];
-        for (j, &b) in input_bits.iter().enumerate() {
-            if j < inputs.len() { inputs[j] = b; }
-        }
-
-        println!("Circuit (LUT) : {label}");
-        println!("  wires   : {}", circ.num_wires);
-        println!("  inputs  : {}", circ.primary_inputs.len());
-        println!("  regs    : {}", circ.registers.len());
-        println!("  lut ops : {}", circ.ops.len());
-        println!("  lut types: {}", circ.lut_types.len());
-        println!("  outputs : {}", circ.outputs.len());
-        println!("  cycles  : {cycles}");
-
-        // ── SRS setup ─────────────────────────────────────────────────────────
-        let max_num_vars = compute_max_num_vars_lut(&circ, cycles);
-        println!(
-            "\nSRS setup (max_num_vars = {max_num_vars}, poly size = {})…",
-            1usize << max_num_vars
-        );
-        let t_srs = Instant::now();
-        let pk = <PCS as CommitmentScheme>::setup_prover(max_num_vars);
-        let vk = <PCS as CommitmentScheme>::setup_verifier(&pk);
-        let srs_ms = t_srs.elapsed().as_millis();
-        println!("  SRS time: {srs_ms} ms");
-
-        // ── Prove ─────────────────────────────────────────────────────────────
-        println!("\nProving (LUT sumcheck + HyperKZG opening proofs)…");
-        let t0 = Instant::now();
-
-        let mut prove_transcript = KeccakTranscript::new(b"lut-circuit-native-zkp");
-        prove_transcript.append_u64(circ.ops.len() as u64);
-        prove_transcript.append_u64(circ.outputs.len() as u64);
-        prove_transcript.append_u64(cycles as u64);
-        for &b in &inputs {
-            prove_transcript.append_u64(b as u64);
-        }
-        let lut_proof = prove_lut_circuit(&circ, &inputs, cycles, &pk, &mut prove_transcript);
-        let prove_ms = t0.elapsed().as_millis();
-        println!("  Prover time: {prove_ms} ms");
-
-        // ── Print outputs ─────────────────────────────────────────────────────
-        // println!("\nOutputs:");
-        // for (idx, (&wire, &out)) in circ
-        //     .outputs
-        //     .iter()
-        //     .zip(lut_proof.outputs.iter())
-        //     .enumerate()
-        // {
-        //     println!("  out[{idx}] wire[{wire}] = {}", out as u8);
-        // }
-
-        // ── Proof summary ─────────────────────────────────────────────────────
-        // println!("\nProof summary (LUT NIZK + Phase 4f batched opening):");
-        // println!("  Max sumcheck vars   : {}", lut_proof.max_num_vars);
-        // println!("  LUT group proofs    : {}", lut_proof.lut_proofs.len());
-        // for lp in &lut_proof.lut_proofs {
-        //     println!(
-        //         "  lut_id=0x{:08X} k={} m={}  {:>7} evals, {} vars, {} round polys, \
-        //          {} commitments (no per-group opening)",
-        //         lp.lut_id, lp.k, lp.m, lp.num_evals, lp.num_vars,
-        //         lp.round_polys.len(),
-        //         lp.k + lp.m,
-        //     );
-        // }
-        let total_polys: usize = lut_proof.lut_proofs.iter().map(|lp| lp.k + lp.m).sum();
-        // println!("  Total polys batched : {total_polys} → 1 combined HyperKZG opening");
-
-        // ── Verify ────────────────────────────────────────────────────────────
-        println!("\nVerifying (no circuit re-execution)…");
-        let t1 = Instant::now();
-
-        let mut verify_transcript = KeccakTranscript::new(b"lut-circuit-native-zkp");
-        verify_transcript.append_u64(circ.ops.len() as u64);
-        verify_transcript.append_u64(circ.outputs.len() as u64);
-        verify_transcript.append_u64(cycles as u64);
-        for &b in &inputs {
-            verify_transcript.append_u64(b as u64);
-        }
-        let all_ok = verify_lut_circuit(&lut_proof, &circ, &vk, &mut verify_transcript);
-        let verify_ms = t1.elapsed().as_millis();
-        println!("  Verifier time: {verify_ms} ms");
-
-        if all_ok {
-            println!("\n✓  All LUT group proofs valid (NIZK verified).");
-        } else {
-            eprintln!("\n✗  One or more LUT group proofs INVALID");
-            std::process::exit(2);
-        }
-
-        // ── bench-csv ─────────────────────────────────────────────────────────
-        if let Some(ref csv_path) = bench_csv {
-            let proof_size = compute_lut_proof_size_bytes(&lut_proof);
-            let srs_size = 1usize << max_num_vars;
-            let total_evals = circ.ops.len() * cycles as usize;
-            let num_lut_types = lut_proof.lut_proofs.len();
-
-            let write_header = !csv_path.exists();
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(csv_path)
-                .unwrap_or_else(|e| panic!("cannot open {}: {e}", csv_path.display()));
-
-            if write_header {
-                writeln!(
-                    file,
-                    "circuit,gates,cycles,total_evals,max_sumcheck_vars,srs_g1_points,\
-                     srs_time_ms,prove_time_ms,verify_time_ms,proof_size_bytes,num_gate_types"
-                ).expect("write CSV header");
-            }
-            writeln!(
-                file,
-                "{label},{},{cycles},{total_evals},{},{srs_size},{srs_ms},{prove_ms},{verify_ms},{proof_size},{num_lut_types}",
-                circ.ops.len(),
-                lut_proof.max_num_vars,
-            ).expect("write CSV row");
-
-            println!("\nBench CSV row appended to: {}", csv_path.display());
-            println!("  proof_size_bytes : {proof_size}");
-            println!("  srs_g1_points    : {srs_size}");
-            println!("  total_evals      : {total_evals}");
-        }
-
-        return; // LUT path complete
     }
 
     // ── Phase 4h: Unified mega-table LogUp ───────────────────────────────────
@@ -1201,7 +1000,7 @@ fn main() {
         println!("  SRS time: {srs_ms} ms");
 
         // ── Prove ─────────────────────────────────────────────────────────────
-        println!("\nProving (Phase 4h unified mega-table LogUp)…");
+        println!("\nProving ");
         let t0 = Instant::now();
 
         let mut prove_transcript = KeccakTranscript::new(b"mega-logup-circuit-native-zkp");
@@ -1215,31 +1014,6 @@ fn main() {
         let prove_ms = t0.elapsed().as_millis();
         println!("  Prover time: {prove_ms} ms");
 
-        // ── Print outputs ─────────────────────────────────────────────────────
-        // println!("\nOutputs:");
-        // for (idx, (&wire, &out)) in circ
-        //     .outputs
-        //     .iter()
-        //     .zip(mega_proof.outputs.iter())
-        //     .enumerate()
-        // {
-        //     println!("  out[{idx}] wire[{wire}] = {}", out as u8);
-        // }
-
-        // ── Proof summary ─────────────────────────────────────────────────────
-        let t = mega_proof.num_lut_types;
-        let k = mega_proof.k;
-        let t_pad = t.next_power_of_two().max(1);
-        println!("\nProof summary (Phase 4h unified mega-table LogUp):");
-        println!("  LUT types (T)       : {t}  (T_pad = {t_pad})");
-        println!("  k (input bits)      : {k}");
-        println!("  m (output bits)     : {}", mega_proof.m);
-        println!("  N_total (trace rows): {}", mega_proof.n_total);
-        println!("  M_query (SC rounds) : {}", mega_proof.num_query_vars);
-        println!("  M_table (SC rounds) : {}", mega_proof.num_table_vars);
-        println!("  Committed polys     : 6  (TypeIdx, PackedIn, PackedOut, InvQ, Count, InvT)");
-        println!("  Opening proofs      : 6  (independent of T)");
-        println!("  [vs Phase 4b: {} commits, {} openings]", t * 5, t * 5);
 
         // ── Verify ────────────────────────────────────────────────────────────
         println!("\nVerifying (no circuit re-execution)…");
@@ -1257,11 +1031,25 @@ fn main() {
         println!("  Verifier time: {verify_ms} ms");
 
         if all_ok {
-            println!("\n✓  Phase 4h mega-LogUp proof valid (NIZK verified).");
+            println!("\n✓  proof valid (NIZK verified).");
         } else {
-            eprintln!("\n✗  Phase 4h mega-LogUp proof INVALID");
+            eprintln!("\n✗  proof INVALID");
             std::process::exit(2);
         }
+
+                // ── Proof summary ─────────────────────────────────────────────────────
+        let t = mega_proof.num_lut_types;
+        let k = mega_proof.k;
+        let t_pad = t.next_power_of_two().max(1);
+        println!("\nProof summary:");
+        println!("  LUT types (T)       : {t}  (T_pad = {t_pad})");
+        println!("  k (input bits)      : {k}");
+        println!("  m (output bits)     : {}", mega_proof.m);
+        println!("  N_total (trace rows): {}", mega_proof.n_total);
+        println!("  M_query (SC rounds) : {}", mega_proof.num_query_vars);
+        println!("  M_table (SC rounds) : {}", mega_proof.num_table_vars);
+        println!("  Committed polys     : 6  (TypeIdx, PackedIn, PackedOut, InvQ, Count, InvT)");
+
 
         // ── bench-csv ─────────────────────────────────────────────────────────
         if let Some(ref csv_path) = bench_csv {
@@ -1300,8 +1088,8 @@ fn main() {
         return; // Phase 4h path complete
     }
 
-    // ── Lasso/LogUp prover path (Phase 4b) ───────────────────────────────────
-    if let Some(Mode::LassoBytecode(ref p)) = mode {
+    // ── Phase S*: Shout-based LUT prover (work in progress) ──────────────────
+    if let Some(Mode::Shout(ref p)) = mode {
         let label = p.display().to_string();
         let circ = load_lut_circuit(p)
             .unwrap_or_else(|e| panic!("load {}: {e}", p.display()));
@@ -1321,7 +1109,7 @@ fn main() {
             if j < inputs.len() { inputs[j] = b; }
         }
 
-        println!("Circuit (Lasso/LogUp) : {label}");
+        println!("Circuit (Shout LUT prover — Phase S2) : {label}");
         println!("  wires     : {}", circ.num_wires);
         println!("  inputs    : {}", circ.primary_inputs.len());
         println!("  regs      : {}", circ.registers.len());
@@ -1330,117 +1118,185 @@ fn main() {
         println!("  outputs   : {}", circ.outputs.len());
         println!("  cycles    : {cycles}");
 
-        // ── SRS setup ─────────────────────────────────────────────────────────
-        // The Lasso prover commits polynomials over {0,1}^M (query side) and
-        // {0,1}^k (table side).  M is the same as in the Phase 2 prover, so we
-        // reuse compute_max_num_vars_lasso.
-        let max_num_vars = compute_max_num_vars_lasso(&circ, cycles);
-        println!(
-            "\nSRS setup (max_num_vars = {max_num_vars}, poly size = {})…",
-            1usize << max_num_vars
+        // Phase S1: build LutShoutTable wrappers for every LUT type.
+        let mut type_order: Vec<u32> = circ.lut_types.keys().copied().collect();
+        type_order.sort();
+
+        println!("\nPhase S1 — LUT types as JoltLookupTable:");
+        for (tid, &lut_id) in type_order.iter().enumerate() {
+            let desc = &circ.lut_types[&lut_id];
+            for out_bit in 0..desc.m {
+                let shout_table = shout_lut::LutShoutTable::from_lut_desc(desc, out_bit);
+                // Verify the wrapped table reproduces the truth table on all Boolean inputs.
+                let ok = (0..(1usize << desc.k)).all(|idx| {
+                    let bit_pos = idx * desc.m + out_bit;
+                    shout_table.entry(idx)
+                        == ((desc.truth_table[bit_pos / 8] >> (bit_pos % 8)) as u64 & 1)
+                });
+                println!(
+                    "  lut_id={lut_id:>4}  type_idx={tid}  out_bit={out_bit}  k={}  m={}  MLE-wrapper-ok={}",
+                    desc.k, desc.m, ok
+                );
+            }
+
+            // Address-space bits for a potential mega-table.
+            let t_pad = type_order.len().next_power_of_two().max(1);
+            let addr_bits = shout_lut::mega_table_address_bits(t_pad, desc.k);
+            if tid == 0 {
+                println!(
+                    "\n  Mega-table address space: T_pad={t_pad}, k={}, total_bits={addr_bits}",
+                    desc.k
+                );
+            }
+        }
+        println!("✓  Phase S1 complete — JoltLookupTable wrappers built and validated.");
+
+        // ── Phase S2: Trace → OneHotPolynomial witnesses ─────────────────────
+        use lut_czbc::evaluate_lut_circuit;
+        let type_index_of: std::collections::HashMap<u32, usize> = type_order
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| (id, i))
+            .collect();
+
+        let (trace, outputs) = evaluate_lut_circuit(&circ, &inputs, cycles);
+
+        // Print circuit outputs for golden-reference comparison with --gate.
+        let out_bits: String = outputs.iter().map(|&b| if b { '1' } else { '0' }).collect();
+        println!("\nCircuit outputs (cycle {cycles}): {out_bits}");
+        let all_one  = outputs.iter().all(|&b| b);
+        let all_zero = outputs.iter().all(|&b| !b);
+        if all_one  { println!("  WARNING: all outputs are 1 — check DFF init / LUT truth tables."); }
+        if all_zero { println!("  WARNING: all outputs are 0 — check DFF init / inputs."); }
+
+        // Uniform k = max input-bit count across all LUT types (pad smaller LUTs).
+        let k = circ.lut_types.values().map(|d| d.k).max().unwrap_or(0);
+        let n_types = type_order.len();
+        // Use log_k_chunk = 4 by default (K = 16 per chunk).
+        let log_k_chunk: usize = 4;
+        let params = shout_lut::OneHotParams::new(n_types, k, log_k_chunk);
+        // Pad trace length to next power of two for Dory commitment dimensions.
+        let t_total = trace.len().next_power_of_two().max(1);
+
+        println!("\nPhase S2 — Trace → OneHotPolynomial witnesses:");
+        println!("  k (uniform input bits) : {k}");
+        println!("  n_types                : {n_types}  (t_pad={})", n_types.next_power_of_two().max(1));
+        println!("  total_address_bits     : {}", params.total_address_bits);
+        println!("  log_k_chunk            : {log_k_chunk}  (K_chunk={})", params.k_chunk);
+        println!("  d (num chunks)         : {}", params.d);
+        println!("  trace rows             : {}  (t_total={t_total})", trace.len());
+
+        // Validate address_for_shout on the simulation trace (S1 sanity check).
+        let mut addr_set = std::collections::HashSet::new();
+        for ev in &trace {
+            let tid = type_index_of[&ev.lut_id];
+            addr_set.insert(ev.address_for_shout(tid, k));
+        }
+        println!("  unique addresses       : {} / {} (collisions expected across cycles)",
+            addr_set.len(), trace.len());
+
+        // Initialize DoryGlobals for OneHotPolynomial construction.
+        let _ = DoryGlobals::initialize(params.k_chunk, t_total);
+
+        let t_s2 = Instant::now();
+        let witnesses = shout_lut::build_shout_witnesses(
+            &trace,
+            &type_index_of,
+            k,
+            &params,
+            t_total,
         );
+        let s2_elapsed = t_s2.elapsed();
+
+        println!("\n  OneHotPolynomial witnesses built:");
+        println!("    polys      : {}", witnesses.len());
+        println!("    K_chunk    : {}", witnesses.first().map_or(0, |w| w.K));
+        println!("    T (len)    : {}", witnesses.first().map_or(0, |w| w.nonzero_indices.len()));
+        let active_total: usize = witnesses
+            .iter()
+            .map(|w| w.nonzero_indices.iter().filter(|x| x.is_some()).count())
+            .sum();
+        println!("    active entries (total across all chunks) : {active_total}");
+        println!("    build time : {:.3?}", s2_elapsed);
+
+        // Spot-check: verify witness nonzero_indices against expected addresses.
+        let mut mismatches = 0usize;
+        for (j, ev) in trace.iter().enumerate() {
+            let tid = type_index_of[&ev.lut_id];
+            let addr = ev.address_for_shout(tid, k);
+            for (chunk_i, w) in witnesses.iter().enumerate() {
+                let expected = shout_lut::address_chunk(addr, chunk_i, log_k_chunk);
+                let got = w.nonzero_indices[j];
+                if got != Some(expected) {
+                    mismatches += 1;
+                    if mismatches <= 5 {
+                        eprintln!("  MISMATCH row={j} chunk={chunk_i}: got={got:?} expected=Some({expected})");
+                    }
+                }
+            }
+        }
+        if mismatches == 0 {
+            println!("\n✓  Phase S2 complete — {} OneHotPolynomial witnesses verified.", witnesses.len());
+        } else {
+            println!("\n✗  Phase S2: {mismatches} witness mismatches.");
+        }
+
+        // ── Phase S3+S4: Shout Prover + Verifier ─────────────────────────────
+        // Compute SRS size: max(log_T, total_address_bits).
+        let max_num_vars = shout_lut::shout_max_num_vars(n_types, k, cycles, circ.ops.len());
+        println!("\nPhase S3/S4 — Shout prover + verifier:");
+        println!("  SRS size   : 2^{max_num_vars} = {} G1 points", 1usize << max_num_vars);
+
         let t_srs = Instant::now();
         let pk = <PCS as CommitmentScheme>::setup_prover(max_num_vars);
         let vk = <PCS as CommitmentScheme>::setup_verifier(&pk);
-        let srs_ms = t_srs.elapsed().as_millis();
-        println!("  SRS time: {srs_ms} ms");
+        println!("  SRS time   : {:.3?}", t_srs.elapsed());
 
-        // ── Prove ─────────────────────────────────────────────────────────────
-        println!("\nProving (Phase 4b Lasso/LogUp + HyperKZG opening proofs)…");
-        let t0 = Instant::now();
-
-        let mut prove_transcript = KeccakTranscript::new(b"lasso-lut-circuit-native-zkp");
+        // Prover transcript: bind circuit identity.
+        let mut prove_transcript = KeccakTranscript::new(b"shout-lut");
         prove_transcript.append_u64(circ.ops.len() as u64);
-        prove_transcript.append_u64(circ.outputs.len() as u64);
         prove_transcript.append_u64(cycles as u64);
         for &b in &inputs {
             prove_transcript.append_u64(b as u64);
         }
-        let lasso_proof = prove_lasso_lut_circuit(&circ, &inputs, cycles, &pk, &mut prove_transcript);
-        let prove_ms = t0.elapsed().as_millis();
+
+        println!("\n  Proving (batch_val commit + 2 sumchecks + 2 HyperKZG opens)…");
+        let t_prove = Instant::now();
+        let shout_proof = shout_lut::prove_shout_lut(
+            &circ, &trace, &type_index_of, k, t_total, &pk, &mut prove_transcript,
+        );
+        let prove_ms = t_prove.elapsed().as_millis();
         println!("  Prover time: {prove_ms} ms");
+        println!("  cycle sc rounds : {}", shout_proof.cycle_sc_polys.len());
+        println!("  addr  sc rounds : {}", shout_proof.addr_sc_polys.len());
+        println!("  bv_eval         : {:?}", shout_proof.bv_eval);
+        println!("  G_agg(r_addr)   : {:?}", shout_proof.final_g_eval);
+        println!("  table_mle(r_addr): {:?}", shout_proof.final_table_eval);
 
-        // ── Print outputs ─────────────────────────────────────────────────────
-        // println!("\nOutputs:");
-        // for (idx, (&wire, &out)) in circ
-        //     .outputs
-        //     .iter()
-        //     .zip(lasso_proof.outputs.iter())
-        //     .enumerate()
-        // {
-        //     println!("  out[{idx}] wire[{wire}] = {}", out as u8);
-        // }
-
-        // ── Proof summary ─────────────────────────────────────────────────────
-        println!("\nProof summary (Lasso/LogUp NIZK with HyperKZG):");
-        println!("  Max sumcheck vars   : {}", lasso_proof.max_num_vars);
-        println!("  LUT group proofs    : {}", lasso_proof.lut_proofs.len());
-        for lp in &lasso_proof.lut_proofs {
-            println!(
-                "  lut_id=0x{:08X} k={} m={}  {:>7} evals, {} vars  \
-                 [5 comms, {} Q-rounds + {} T-rounds, 5 openings]",
-                lp.lut_id, lp.k, lp.m, lp.num_evals, lp.num_vars,
-                lp.sc_q_polys.len(), lp.sc_t_polys.len()
-            );
-        }
-
-        // ── Verify ────────────────────────────────────────────────────────────
-        println!("\nVerifying (no circuit re-execution)…");
-        let t1 = Instant::now();
-
-        let mut verify_transcript = KeccakTranscript::new(b"lasso-lut-circuit-native-zkp");
+        // Verifier transcript (same initialisation as prover).
+        let mut verify_transcript = KeccakTranscript::new(b"shout-lut");
         verify_transcript.append_u64(circ.ops.len() as u64);
-        verify_transcript.append_u64(circ.outputs.len() as u64);
         verify_transcript.append_u64(cycles as u64);
         for &b in &inputs {
             verify_transcript.append_u64(b as u64);
         }
-        let all_ok = verify_lasso_lut_circuit(&lasso_proof, &circ, &vk, &mut verify_transcript);
-        let verify_ms = t1.elapsed().as_millis();
+
+        println!("\n  Verifying (sumcheck replay + mega-table recompute + HyperKZG verify)…");
+        let t_verify = Instant::now();
+        let ok = shout_lut::verify_shout_lut(&shout_proof, &circ, &vk, &mut verify_transcript);
+        let verify_ms = t_verify.elapsed().as_millis();
         println!("  Verifier time: {verify_ms} ms");
 
-        if all_ok {
-            println!("\n✓  All Lasso LUT group proofs valid (NIZK verified).");
+        if ok {
+            println!("\n✓  Phase S3/S4 complete — Shout proof VALID.");
+            println!("   batch_val committed before cycle challenge (binding).");
+            println!("   G_agg committed before address challenge (binding).");
+            println!("   Mega-table recomputed by verifier from public circuit.");
         } else {
-            eprintln!("\n✗  One or more Lasso LUT group proofs INVALID");
+            eprintln!("\n✗  Phase S3/S4: Shout proof INVALID.");
             std::process::exit(2);
         }
-
-        // ── bench-csv ─────────────────────────────────────────────────────────
-        if let Some(ref csv_path) = bench_csv {
-            let proof_size   = compute_lasso_proof_size_bytes(&lasso_proof);
-            let srs_size     = 1usize << max_num_vars;
-            let total_evals  = circ.ops.len() * cycles as usize;
-            let num_lut_types = lasso_proof.lut_proofs.len();
-
-            let write_header = !csv_path.exists();
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(csv_path)
-                .unwrap_or_else(|e| panic!("cannot open {}: {e}", csv_path.display()));
-
-            if write_header {
-                writeln!(
-                    file,
-                    "circuit,gates,cycles,total_evals,max_sumcheck_vars,srs_g1_points,\
-                     srs_time_ms,prove_time_ms,verify_time_ms,proof_size_bytes,num_lut_types"
-                ).expect("write CSV header");
-            }
-            writeln!(
-                file,
-                "{label},{},{cycles},{total_evals},{},{srs_size},{srs_ms},{prove_ms},{verify_ms},{proof_size},{num_lut_types}",
-                circ.ops.len(),
-                lasso_proof.max_num_vars,
-            ).expect("write CSV row");
-
-            println!("\nBench CSV row appended to: {}", csv_path.display());
-            println!("  proof_size_bytes : {proof_size}");
-            println!("  srs_g1_points    : {srs_size}");
-            println!("  total_evals      : {total_evals}");
-        }
-
-        return; // Lasso path complete
+        return;
     }
 
     // ── Gate prover path (original Phase 0/1) ────────────────────────────────
@@ -1453,9 +1309,8 @@ fn main() {
             let c = load_circuit(&p).unwrap_or_else(|e| panic!("load {}: {e}", p.display()));
             (p.display().to_string(), c)
         }
-        Some(Mode::LutBytecode(_))   => unreachable!("handled above"),
-        Some(Mode::LassoBytecode(_))  => unreachable!("handled above"),
-        Some(Mode::MegaBytecode(_))   => unreachable!("handled above"),
+        Some(Mode::MegaBytecode(_)) => unreachable!("handled above"),
+        Some(Mode::Shout(_)) => unreachable!("handled above"),
         None => {
             eprintln!("missing --tiny or <bytecode>");
             print_usage(&args[0]);
@@ -1492,14 +1347,24 @@ fn main() {
     println!("  outputs: {}", circ.outputs.len());
     println!("  cycles : {cycles}");
 
-    if show_pages {
-        let (trace, _) = evaluate_circuit(&circ, &inputs, cycles);
-        println!("\nGate trace ({} evaluations):", trace.len());
-        for (idx, g) in trace.iter().enumerate() {
-            println!(
-                "  [{idx:>5}] mask=0x{:02X} a={} b={} -> out={}",
-                g.mask, g.a as u8, g.b as u8, g.out as u8
-            );
+    // Always print the circuit outputs as golden reference.
+    {
+        let (gate_trace, gate_outputs) = evaluate_circuit(&circ, &inputs, cycles);
+        let out_bits: String = gate_outputs.iter().map(|&b| if b { '1' } else { '0' }).collect();
+        println!("\nCircuit outputs (cycle {cycles}): {out_bits}");
+        let all_one  = gate_outputs.iter().all(|&b| b);
+        let all_zero = gate_outputs.iter().all(|&b| !b);
+        if all_one  { println!("  WARNING: all outputs are 1 — check DFF init / gate encoding."); }
+        if all_zero { println!("  WARNING: all outputs are 0 — check DFF init / inputs."); }
+
+        if show_pages {
+            println!("\nGate trace ({} evaluations):", gate_trace.len());
+            for (idx, g) in gate_trace.iter().enumerate() {
+                println!(
+                    "  [{idx:>5}] mask=0x{:02X} a={} b={} -> out={}",
+                    g.mask, g.a as u8, g.b as u8, g.out as u8
+                );
+            }
         }
     }
 
@@ -1518,7 +1383,7 @@ fn main() {
     println!("\nProving (HyperKZG commitments + sumcheck + opening proofs)…");
     let t0 = Instant::now();
 
-    let mut prove_transcript = KeccakTranscript::new(b"bool-circuit-native-zkp");
+    let mut prove_transcript = KeccakTranscript::new(b"bool-lut-zkp");
     // Public metadata bound to the Fiat-Shamir oracle.
     prove_transcript.append_u64(circ.ops.len() as u64);
     prove_transcript.append_u64(circ.outputs.len() as u64);
@@ -1532,18 +1397,7 @@ fn main() {
     let prove_ms = t0.elapsed().as_millis();
     println!("  Prover time: {prove_ms} ms");
 
-    // ── Print outputs ────────────────────────────────────────────────────────
-    // println!("\nOutputs:");
-    // for (idx, (&wire, &out)) in circ
-    //     .outputs
-    //     .iter()
-    //     .zip(circuit_proof.outputs.iter())
-    //     .enumerate()
-    // {
-    //     println!("  out[{idx}] wire[{wire}] = {}", out as u8);
-    // }
-
-    // ── Show proof summary ───────────────────────────────────────────────────
+    // ── Proof summary ────────────────────────────────────────────────────────
     println!("\nProof summary (NIZK with HyperKZG):");
     println!("  Max sumcheck vars: {}", circuit_proof.max_num_vars);
     for gp in &circuit_proof.gate_proofs {
@@ -1570,7 +1424,7 @@ fn main() {
     println!("\nVerifying (no circuit re-execution)…");
     let t1 = Instant::now();
 
-    let mut verify_transcript = KeccakTranscript::new(b"bool-circuit-native-zkp");
+    let mut verify_transcript = KeccakTranscript::new(b"bool-lut-zkp");
     // Same public metadata (circuit description is public).
     verify_transcript.append_u64(circ.ops.len() as u64);
     verify_transcript.append_u64(circ.outputs.len() as u64);

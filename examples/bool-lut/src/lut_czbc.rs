@@ -271,6 +271,33 @@ pub struct LutEval {
     pub outputs: Vec<bool>,
 }
 
+impl LutEval {
+    /// Pack the boolean inputs into an integer (LSB-first: `inputs[0]` = bit 0).
+    ///
+    /// This is the index into the LUT truth table for this invocation.
+    #[inline]
+    pub fn packed_input(&self) -> usize {
+        self.inputs
+            .iter()
+            .enumerate()
+            .fold(0usize, |acc, (i, &b)| if b { acc | (1 << i) } else { acc })
+    }
+
+    /// Compute the **mega-table Shout lookup address** for this trace row.
+    ///
+    /// Encoding: `address = type_index * 2^k + packed_input`
+    ///
+    /// # Arguments
+    /// * `type_index` — 0-based index of this LUT's type in the canonical ordering
+    /// * `k`          — number of input bits (same for all LUT types in the mega-table)
+    ///
+    /// Used by Phase S2 to build `OneHotPolynomial` witnesses.
+    #[inline]
+    pub fn address_for_shout(&self, type_index: usize, k: usize) -> usize {
+        (type_index << k) | self.packed_input()
+    }
+}
+
 /// Simulate [`LutCirc`] for `cycles` clock cycles, collecting every LUT
 /// invocation into a flat trace (cycle-major, op-minor ordering).
 ///

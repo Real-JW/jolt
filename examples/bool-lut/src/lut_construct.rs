@@ -1,13 +1,13 @@
 //! **Phase 4h — Unified Mega-Table LogUp Argument (Type-Count Independence)**
 //!
-//! Replaces T independent LogUp instances (Phase 4b / lut_lasso.rs) with a
+//! Replaces T independent LogUp instances (Phase 4b) with a
 //! **single** LogUp argument over a concatenated "mega-table" of all T truth
 //! tables.  The prover cost scales with the total trace size N_total, not the
 //! number of distinct LUT types T.
 //!
 //! # Problem Addressed
 //!
-//! Phase 4b (lut_lasso.rs) runs one LogUp per type:
+//! Phase 4b runs one LogUp per type:
 //! - 5 HyperKZG commits × T types = 5T commits   (594 types → 2970 commits for AES)
 //! - sumcheck setup cost × T      = T × C_fixed   (≈ 38 s for AES)
 //!
@@ -63,7 +63,7 @@ use jolt_core::poly::commitment::hyperkzg::{
 use jolt_core::poly::multilinear_polynomial::MultilinearPolynomial;
 use jolt_core::transcripts::{AppendToTranscript, KeccakTranscript, Transcript};
 
-use crate::lczbc::{evaluate_lut_circuit, LutCirc};
+use crate::lut_czbc::{evaluate_lut_circuit, LutCirc};
 
 type Challenge = <Fr as JoltField>::Challenge;
 
@@ -207,7 +207,7 @@ pub struct MegaLogUpProof {
 fn build_mega_table_b(
     lut_ids_sorted: &[u32],
     type_map: &HashMap<u32, usize>, // lut_id → tid (0-based index)
-    lut_types_map: &HashMap<u32, crate::lczbc::LutDesc>,
+    lut_types_map: &HashMap<u32, crate::lut_czbc::LutDesc>,
     k: usize,
     m: usize,
     t_pad: usize,
@@ -914,7 +914,7 @@ pub fn compute_mega_proof_size_bytes(proof: &MegaLogUpProof) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lczbc::{LutCirc, LutDesc, LutOp};
+    use crate::lut_czbc::{LutCirc, LutDesc, LutOp};
     use jolt_core::poly::commitment::commitment_scheme::CommitmentScheme;
     use jolt_core::poly::commitment::hyperkzg::HyperKZG;
     use std::collections::HashMap;
