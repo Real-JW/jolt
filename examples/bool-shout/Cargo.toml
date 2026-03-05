@@ -1,0 +1,19 @@
+[package]
+name = "bool-shout"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone host-side Shout lookup proof for boolean gate circuits (.czbc).
+# Unlike `bool-lut --shout-gate`, this example does **not** convert gates into
+# merged LUT cones. It proves correctness of gate truth-table lookups directly.
+
+[dependencies]
+jolt-core = { workspace = true, features = ["host"] }
+ark-bn254  = { workspace = true, features = ["std"] }
+ark-ec     = { workspace = true }
+ark-ff     = { workspace = true, features = ["std"] }
+ark-serialize = { workspace = true }
+
+[dev-dependencies]
+serial_test = { workspace = true }
+

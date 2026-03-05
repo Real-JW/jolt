@@ -3,16 +3,16 @@ name = "bool-lut"
 version = "0.1.0"
 edition = "2021"
 
-# No guest sub-crate — this example runs entirely on the host using
-# Jolt's lookup-table and sumcheck primitives directly (no RISC-V zkVM).
+# Host-side LUT Shout prover for boolean gate circuits (.czbc / .lczbc).
+# Merges gates into k-input LUT cones (greedy cone-growing) then proves
+# correctness with a single Shout mega-table instance + HyperKZG opening.
 
 [dependencies]
-jolt-core = { workspace = true, features = ["host"] }
-ark-bn254  = { workspace = true, features = ["std"] }
-ark-ec     = { workspace = true }
-ark-ff     = { workspace = true, features = ["std"] }
+jolt-core     = { workspace = true, features = ["host"] }
+ark-bn254     = { workspace = true, features = ["std"] }
+ark-ff        = { workspace = true, features = ["std"] }
 ark-serialize = { workspace = true }
-serde      = { workspace = true }
+serde         = { workspace = true }
 
 [dev-dependencies]
 serial_test = { workspace = true }

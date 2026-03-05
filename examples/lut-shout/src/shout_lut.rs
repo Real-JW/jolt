@@ -36,7 +36,6 @@ use std::collections::HashMap;
 
 use ark_bn254::{Bn254, Fr};
 use ark_ff::{One, Zero};
-use ark_serialize::CanonicalSerialize;
 use serde::{Deserialize, Serialize};
 
 use jolt_core::field::{ChallengeFieldOps, FieldChallengeOps, JoltField};
@@ -48,7 +47,7 @@ use jolt_core::poly::one_hot_polynomial::OneHotPolynomial;
 use jolt_core::transcripts::{AppendToTranscript, KeccakTranscript, Transcript};
 use jolt_core::zkvm::lookup_table::{JoltLookupTable, SubCircuitLut};
 
-use crate::lut_czbc::{LutDesc, LutEval};
+use crate::lut_czbc::{LutCirc, LutDesc, LutEval};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LutShoutTable
@@ -593,7 +592,7 @@ pub fn mle_eval_fr(entries: &[Fr], point: &[Fr]) -> Fr {
 /// * `k`          — uniform (padded) input-bit count
 /// * `alpha`      — Fiat-Shamir alpha challenge for multi-output batching
 pub fn build_mega_table_batched(
-    lut_types: &HashMap<u32, LutDesc>,
+    circ: &LutCirc,
     type_order: &[u32],
     k: usize,
     alpha: Fr,
@@ -605,7 +604,7 @@ pub fn build_mega_table_batched(
 
     let mut mega = vec![Fr::zero(); mega_size];
     for (tid, &lut_id) in type_order.iter().enumerate() {
-        let desc = &lut_types[&lut_id];
+        let desc = &circ.lut_types[&lut_id];
         let batched = alpha_batch_table_entries(desc, alpha);
         let k_lut = desc.k;
         // If k_lut < k, replicate the truth table for the extra MSBs (they are
@@ -701,7 +700,7 @@ pub struct ShoutLutProof {
 /// # Returns
 /// A [`ShoutLutProof`] whose validity can be checked with [`verify_shout_lut`].
 pub fn prove_shout_lut(
-    lut_types: &HashMap<u32, LutDesc>,
+    circ: &LutCirc,
     trace: &[LutEval],
     type_index_of: &HashMap<u32, usize>,
     k: usize,
@@ -728,7 +727,7 @@ pub fn prove_shout_lut(
     let alpha: Fr = transcript.challenge_scalar();
 
     // ── 2. Build alpha-batched mega-table ────────────────────────────────────
-    let mega_table = build_mega_table_batched(lut_types, &type_order, k, alpha);
+    let mega_table = build_mega_table_batched(circ, &type_order, k, alpha);
 
     // ── 3. Compute batch_val[j] for each trace row ───────────────────────────
     // batch_val[j] = mega_table[type_index[j] * 2^k + packed_input[j]]
@@ -909,7 +908,7 @@ pub fn prove_shout_lut(
 /// Returns `true` iff all checks pass.
 pub fn verify_shout_lut(
     proof: &ShoutLutProof,
-    lut_types: &HashMap<u32, LutDesc>,
+    circ: &LutCirc,
     vk: &HyperKZGVerifierKey<Bn254>,
     transcript: &mut KeccakTranscript,
 ) -> bool {
@@ -949,9 +948,9 @@ pub fn verify_shout_lut(
     }
 
     // ── Reconstruct mega-table (public computation) ──────────────────────────
-    let mut type_order: Vec<u32> = lut_types.keys().copied().collect();
+    let mut type_order: Vec<u32> = circ.lut_types.keys().copied().collect();
     type_order.sort_unstable();
-    let mega_table = build_mega_table_batched(lut_types, &type_order, k, *alpha);
+    let mega_table = build_mega_table_batched(circ, &type_order, k, *alpha);
 
     // ── Absorb comm_bv → re-derive r_T ──────────────────────────────────────
     comm_bv.append_to_transcript(transcript);
@@ -1104,43 +1103,6 @@ pub fn verify_shout_lut(
     }
 
     true
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Proof size helper
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Estimate the serialised byte size of a [`ShoutLutProof`].
-pub fn compute_shout_proof_size_bytes(proof: &ShoutLutProof) -> usize {
-    let mut total = 0usize;
-    let mut buf = Vec::new();
-
-    // 2 HyperKZG commitments (comm_bv, comm_g)
-    for comm in [&proof.comm_bv, &proof.comm_g] {
-        buf.clear();
-        comm.0.serialize_compressed(&mut buf).ok();
-        total += buf.len();
-    }
-
-    // Fiat-Shamir scalars: alpha + bv_eval + final_g_eval + final_table_eval
-    total += 4 * 32;
-
-    // Cycle sumcheck round polynomials (degree 2, 3 Fr each)
-    total += proof.cycle_sc_polys.len() * 3 * 32;
-
-    // Address sumcheck round polynomials (degree 2, 3 Fr each)
-    total += proof.addr_sc_polys.len() * 3 * 32;
-
-    // 2 HyperKZG opening proofs
-    for opt_pf in [&proof.opening_bv, &proof.opening_g] {
-        if let Some(pf) = opt_pf {
-            buf.clear();
-            pf.serialize_compressed(&mut buf).ok();
-            total += buf.len();
-        }
-    }
-
-    total
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1640,7 +1602,7 @@ mod tests {
         };
         let type_order = vec![0u32];
         let alpha = Fr::one();
-        let mega = build_mega_table_batched(&circ.lut_types, &type_order, 2, alpha);
+        let mega = build_mega_table_batched(&circ, &type_order, 2, alpha);
         // t_pad=1, table_size=4, mega_size=4
         assert_eq!(mega.len(), 4);
         // AND truth table (LSB-first): [0, 0, 0, 1]
@@ -1655,7 +1617,7 @@ mod tests {
         let circ = two_type_circ();
         let type_order = vec![0u32, 1u32];
         let alpha = fr(2); // alpha=2 for multi-output batching (m=1 so just identity)
-        let mega = build_mega_table_batched(&circ.lut_types, &type_order, 2, alpha);
+        let mega = build_mega_table_batched(&circ, &type_order, 2, alpha);
         // t_pad=2, table_size=4, mega_size=8
         assert_eq!(mega.len(), 8);
         // AND entries at [0..4]: [0, 0, 0, 1]
@@ -1685,12 +1647,12 @@ mod tests {
 
     // ── End-to-end prover + verifier ─────────────────────────────────────────
 
-    fn make_shout_srs(lut_types: &HashMap<u32, LutDesc>, trace_len: usize) -> (
+    fn make_shout_srs(circ: &LutCirc, trace_len: usize) -> (
         jolt_core::poly::commitment::hyperkzg::HyperKZGProverKey<Bn254>,
         jolt_core::poly::commitment::hyperkzg::HyperKZGVerifierKey<Bn254>,
     ) {
-        let k = lut_types.values().map(|d| d.k).max().unwrap_or(0);
-        let n_types = lut_types.len();
+        let k = circ.lut_types.values().map(|d| d.k).max().unwrap_or(0);
+        let n_types = circ.lut_types.len();
         let max_vars = shout_max_num_vars(n_types, k, 1, trace_len);
         let pk = PCS::setup_prover(max_vars.max(1));
         let vk = PCS::setup_verifier(&pk);
@@ -1705,15 +1667,15 @@ mod tests {
         let k = 2usize;
         let t_total = trace.len().next_power_of_two().max(1); // = 4
 
-        let (pk, vk) = make_shout_srs(&circ.lut_types, trace.len());
+        let (pk, vk) = make_shout_srs(&circ, trace.len());
 
         // Prove.
         let mut pt = KeccakTranscript::new(b"shout-lut-test");
-        let proof = prove_shout_lut(&circ.lut_types, &trace, &type_index_of, k, t_total, &pk, &mut pt);
+        let proof = prove_shout_lut(&circ, &trace, &type_index_of, k, t_total, &pk, &mut pt);
 
         // Verify with a fresh transcript (same initialization).
         let mut vt = KeccakTranscript::new(b"shout-lut-test");
-        let ok = verify_shout_lut(&proof, &circ.lut_types, &vk, &mut vt);
+        let ok = verify_shout_lut(&proof, &circ, &vk, &mut vt);
         assert!(ok, "shout prove+verify should succeed for valid two-type trace");
     }
 
@@ -1736,13 +1698,13 @@ mod tests {
         let k = 2usize;
         let t_total = trace.len().next_power_of_two().max(1); // = 2
 
-        let (pk, vk) = make_shout_srs(&circ.lut_types, trace.len());
+        let (pk, vk) = make_shout_srs(&circ, trace.len());
 
         let mut pt = KeccakTranscript::new(b"shout-single");
-        let proof = prove_shout_lut(&circ.lut_types, &trace, &type_index_of, k, t_total, &pk, &mut pt);
+        let proof = prove_shout_lut(&circ, &trace, &type_index_of, k, t_total, &pk, &mut pt);
 
         let mut vt = KeccakTranscript::new(b"shout-single");
-        assert!(verify_shout_lut(&proof, &circ.lut_types, &vk, &mut vt),
+        assert!(verify_shout_lut(&proof, &circ, &vk, &mut vt),
             "single-type shout proof should verify");
     }
 
@@ -1754,10 +1716,10 @@ mod tests {
         let k = 2usize;
         let t_total = trace.len().next_power_of_two().max(1);
 
-        let (pk, vk) = make_shout_srs(&circ.lut_types, trace.len());
+        let (pk, vk) = make_shout_srs(&circ, trace.len());
 
         let mut pt = KeccakTranscript::new(b"shout-tamper-cy");
-        let mut proof = prove_shout_lut(&circ.lut_types, &trace, &type_index_of, k, t_total, &pk, &mut pt);
+        let mut proof = prove_shout_lut(&circ, &trace, &type_index_of, k, t_total, &pk, &mut pt);
 
         // Corrupt the first cycle-sumcheck round polynomial.
         if let Some(p) = proof.cycle_sc_polys.first_mut() {
@@ -1765,7 +1727,7 @@ mod tests {
         }
 
         let mut vt = KeccakTranscript::new(b"shout-tamper-cy");
-        assert!(!verify_shout_lut(&proof, &circ.lut_types, &vk, &mut vt),
+        assert!(!verify_shout_lut(&proof, &circ, &vk, &mut vt),
             "tampered cycle sumcheck should fail verification");
     }
 
@@ -1777,10 +1739,10 @@ mod tests {
         let k = 2usize;
         let t_total = trace.len().next_power_of_two().max(1);
 
-        let (pk, vk) = make_shout_srs(&circ.lut_types, trace.len());
+        let (pk, vk) = make_shout_srs(&circ, trace.len());
 
         let mut pt = KeccakTranscript::new(b"shout-tamper-ad");
-        let mut proof = prove_shout_lut(&circ.lut_types, &trace, &type_index_of, k, t_total, &pk, &mut pt);
+        let mut proof = prove_shout_lut(&circ, &trace, &type_index_of, k, t_total, &pk, &mut pt);
 
         // Corrupt the first address-sumcheck round polynomial.
         if let Some(p) = proof.addr_sc_polys.first_mut() {
@@ -1788,7 +1750,7 @@ mod tests {
         }
 
         let mut vt = KeccakTranscript::new(b"shout-tamper-ad");
-        assert!(!verify_shout_lut(&proof, &circ.lut_types, &vk, &mut vt),
+        assert!(!verify_shout_lut(&proof, &circ, &vk, &mut vt),
             "tampered addr sumcheck should fail verification");
     }
 }
