@@ -423,6 +423,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "baseline-gate"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "ark-serialize",
+ "jolt-core",
+ "serde",
+ "serial_test",
+]
+
+[[package]]
 name = "bincode"
 version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -528,30 +541,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
-]
-
-[[package]]
-name = "bool-lut"
-version = "0.1.0"
-dependencies = [
- "ark-bn254",
- "ark-ff",
- "ark-serialize",
- "jolt-core",
- "serde",
- "serial_test",
-]
-
-[[package]]
-name = "bool-shout"
-version = "0.1.0"
-dependencies = [
- "ark-bn254",
- "ark-ec",
- "ark-ff",
- "ark-serialize",
- "jolt-core",
- "serial_test",
 ]
 
 [[package]]
@@ -2311,19 +2300,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
 
 [[package]]
-name = "lut-shout"
-version = "0.1.0"
-dependencies = [
- "ark-bn254",
- "ark-ec",
- "ark-ff",
- "ark-serialize",
- "jolt-core",
- "serde",
- "serial_test",
-]
-
-[[package]]
 name = "malloc-guest"
 version = "0.1.0"
 dependencies = [
@@ -3812,6 +3788,32 @@ name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
+
+[[package]]
+name = "shout-gate"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "ark-serialize",
+ "jolt-core",
+ "serial_test",
+]
+
+[[package]]
+name = "shout-lut"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "ark-serialize",
+ "jolt-core",
+ "rayon",
+ "serde",
+ "serial_test",
+]
 
 [[package]]
 name = "simd-adler32"

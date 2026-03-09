@@ -4,9 +4,9 @@
 //! Key layout: `index = (a << 1) | b` where bit `i` of `mask` is `f(a=(i>>1), b=(i&1))`.
 //! Standard masks: AND=0x08, OR=0x0E, XOR=0x06, NOT=0x03.
 
+use super::JoltLookupTable;
 use crate::field::{ChallengeFieldOps, FieldChallengeOps, JoltField};
 use serde::{Deserialize, Serialize};
-use super::JoltLookupTable;
 
 /// A generic boolean gate parameterised by a 4-bit truth-table mask.
 ///
@@ -19,7 +19,7 @@ pub struct GateLookupTable {
 
 impl GateLookupTable {
     pub const AND: Self = Self { mask: 0x08 };
-    pub const OR:  Self = Self { mask: 0x0E };
+    pub const OR: Self = Self { mask: 0x0E };
     pub const XOR: Self = Self { mask: 0x06 };
     pub const NOT: Self = Self { mask: 0x03 };
 
@@ -33,7 +33,7 @@ impl GateLookupTable {
     /// Evaluate the MLE of this gate's truth table at arbitrary field points `(ra, rb)`.
     ///
     /// Both `ra` and `rb` are plain `F` field elements (no Challenge wrapper).
-    /// This is the helper used by the standalone sumcheck in `bool-lut`.
+    /// This is the helper used by the standalone sumcheck in `shout-lut`.
     pub fn evaluate_mle_at<F: JoltField>(&self, ra: F, rb: F) -> F {
         let t = |i: u32| F::from_u64(((self.mask >> i) & 1) as u64);
         let one = F::one();
@@ -54,7 +54,11 @@ impl JoltLookupTable for GateLookupTable {
         C: ChallengeFieldOps<F>,
         F: JoltField + FieldChallengeOps<C>,
     {
-        assert_eq!(r.len(), 2, "GateLookupTable: expected 2 variables [r_a, r_b]");
+        assert_eq!(
+            r.len(),
+            2,
+            "GateLookupTable: expected 2 variables [r_a, r_b]"
+        );
         let (ra, rb) = (r[0], r[1]);
         let t = |i: u32| F::from_u64(((self.mask >> i) & 1) as u64);
         let one_m_ra: F = F::one() - ra;
@@ -68,13 +72,17 @@ impl JoltLookupTable for GateLookupTable {
 
 #[cfg(test)]
 mod tests {
-    use ark_bn254::Fr;
-    use ark_ff::{One, Zero};
     use super::GateLookupTable;
     use crate::zkvm::lookup_table::JoltLookupTable;
+    use ark_bn254::Fr;
+    use ark_ff::{One, Zero};
 
     fn f(b: bool) -> Fr {
-        if b { Fr::one() } else { Fr::zero() }
+        if b {
+            Fr::one()
+        } else {
+            Fr::zero()
+        }
     }
 
     fn test_gate_boolean(table: GateLookupTable) {
@@ -82,19 +90,34 @@ mod tests {
             for b in [false, true] {
                 let expected = table.eval_bool(a, b);
                 let got = table.evaluate_mle_at(f(a), f(b));
-                assert_eq!(got, f(expected), "gate 0x{:02X} a={} b={}", table.mask, a as u8, b as u8);
+                assert_eq!(
+                    got,
+                    f(expected),
+                    "gate 0x{:02X} a={} b={}",
+                    table.mask,
+                    a as u8,
+                    b as u8
+                );
             }
         }
     }
 
     #[test]
-    fn and_gate_boolean_inputs() { test_gate_boolean(GateLookupTable::AND); }
+    fn and_gate_boolean_inputs() {
+        test_gate_boolean(GateLookupTable::AND);
+    }
     #[test]
-    fn or_gate_boolean_inputs()  { test_gate_boolean(GateLookupTable::OR); }
+    fn or_gate_boolean_inputs() {
+        test_gate_boolean(GateLookupTable::OR);
+    }
     #[test]
-    fn xor_gate_boolean_inputs() { test_gate_boolean(GateLookupTable::XOR); }
+    fn xor_gate_boolean_inputs() {
+        test_gate_boolean(GateLookupTable::XOR);
+    }
     #[test]
-    fn not_gate_boolean_inputs() { test_gate_boolean(GateLookupTable::NOT); }
+    fn not_gate_boolean_inputs() {
+        test_gate_boolean(GateLookupTable::NOT);
+    }
 
     #[test]
     fn materialize_xor() {

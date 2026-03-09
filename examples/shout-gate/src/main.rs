@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use ark_bn254::Bn254;
 use jolt_core::poly::commitment::commitment_scheme::CommitmentScheme;
+use jolt_core::poly::commitment::dory::DoryGlobals;
 use jolt_core::poly::commitment::hyperkzg::HyperKZG;
 use jolt_core::transcripts::{KeccakTranscript, Transcript};
 
@@ -40,11 +41,14 @@ fn parse_bit_string(s: &str) -> io::Result<Vec<bool>> {
 
 fn print_usage(bin: &str) {
     eprintln!("Usage:");
-    eprintln!("  {bin} <circuit.czbc> [input-bits] [--cycles N] [--bench-csv <file>]");
+    eprintln!(
+        "  {bin} <circuit.czbc> [input-bits] [--cycles N] [--bench-csv <file>] [--debug-witnesses]"
+    );
     eprintln!();
     eprintln!("Notes:");
     eprintln!("  - Proves gate truth-table lookups with Shout (no LUT merging).");
     eprintln!("  - input-bits is a 0/1 string matching the circuit's primary inputs.");
+    eprintln!("  - --debug-witnesses enables slow Dory/one-hot witness validation.");
 }
 
 fn main() {
@@ -58,13 +62,17 @@ fn main() {
     let mut input_bits_raw: Option<String> = None;
     let mut cycles_override: Option<u32> = None;
     let mut bench_csv: Option<PathBuf> = None;
+    let mut debug_witnesses = false;
 
     let mut i = 1usize;
     while i < args.len() {
         match args[i].as_str() {
             "--cycles" => {
-                cycles_override =
-                    Some(args[i + 1].parse().unwrap_or_else(|_| panic!("bad --cycles")));
+                cycles_override = Some(
+                    args[i + 1]
+                        .parse()
+                        .unwrap_or_else(|_| panic!("bad --cycles")),
+                );
                 i += 2;
             }
             "--bench-csv" => {
@@ -75,6 +83,10 @@ fn main() {
                 }
                 bench_csv = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
+            }
+            "--debug-witnesses" => {
+                debug_witnesses = true;
+                i += 1;
             }
             "-h" | "--help" => {
                 print_usage(&args[0]);
@@ -101,7 +113,8 @@ fn main() {
     }
 
     let bytecode = bytecode.expect("circuit path required");
-    let circ = czbc::load_circuit(&bytecode).unwrap_or_else(|e| panic!("load {}: {e}", bytecode.display()));
+    let circ = czbc::load_circuit(&bytecode)
+        .unwrap_or_else(|e| panic!("load {}: {e}", bytecode.display()));
     let cycles = cycles_override.unwrap_or(circ.default_cycles).max(1);
 
     let inputs = if let Some(s) = input_bits_raw.as_deref() {
@@ -128,18 +141,87 @@ fn main() {
         .map(|(i, &m)| (m, i))
         .collect();
 
+    let t_trace = Instant::now();
     let (trace, final_outputs) = czbc::evaluate_circuit(&circ, &inputs, cycles);
-    let out_bits: String = final_outputs.iter().map(|&b| if b { '1' } else { '0' }).collect();
+    let trace_eval_ms = t_trace.elapsed().as_millis();
+    let out_bits: String = final_outputs
+        .iter()
+        .map(|&b| if b { '1' } else { '0' })
+        .collect();
     println!("Circuit outputs (cycle {cycles}): {out_bits}");
 
     let k = 2usize;
     let t_total = trace.len().next_power_of_two().max(1);
-    let max_num_vars = shout_gate::shout_max_num_vars(n_types, k, cycles, trace.len() / cycles as usize);
-
+    let max_num_vars =
+        shout_gate::shout_max_num_vars(n_types, k, cycles, trace.len() / cycles as usize);
     println!("\nShout prover + verifier:");
     println!("  trace rows : {} (t_total={t_total})", trace.len());
     println!("  k          : {k}");
     println!("  SRS vars   : {max_num_vars}  (2^{max_num_vars} G1 points)");
+    println!("  trace eval : {trace_eval_ms} ms");
+
+    if debug_witnesses {
+        let log_k_chunk = 4usize;
+        let params = shout_gate::GateWitnessParams::new(n_types, k, log_k_chunk);
+        let mut addr_set = std::collections::HashSet::new();
+        for ev in &trace {
+            let tid = type_index_of[&ev.mask];
+            addr_set.insert(ev.address_for_shout(tid, k));
+        }
+
+        println!("\nDebug witnesses:");
+        println!("  total_address_bits : {}", params.total_address_bits);
+        println!(
+            "  log_k_chunk        : {log_k_chunk}  (K_chunk={})",
+            params.k_chunk
+        );
+        println!("  d (num chunks)     : {}", params.d);
+        println!(
+            "  unique addresses   : {} / {}",
+            addr_set.len(),
+            trace.len()
+        );
+
+        let _ = DoryGlobals::initialize(params.k_chunk, t_total);
+        let t_debug = Instant::now();
+        let witnesses =
+            shout_gate::build_gate_shout_witnesses(&trace, &type_index_of, k, &params, t_total);
+        let debug_elapsed = t_debug.elapsed();
+
+        println!(
+            "  witnesses built    : {} (time: {:.3?})",
+            witnesses.len(),
+            debug_elapsed
+        );
+        println!(
+            "  witness T          : {}",
+            witnesses.first().map_or(0, |w| w.nonzero_indices.len())
+        );
+
+        let mut mismatches = 0usize;
+        for (j, ev) in trace.iter().enumerate() {
+            let tid = type_index_of[&ev.mask];
+            let addr = ev.address_for_shout(tid, k);
+            for (chunk_i, w) in witnesses.iter().enumerate() {
+                let expected = shout_gate::address_chunk(addr, chunk_i, log_k_chunk);
+                let got = w.nonzero_indices[j];
+                if got != Some(expected) {
+                    mismatches += 1;
+                    if mismatches <= 5 {
+                        eprintln!(
+                            "  witness mismatch row={j} chunk={chunk_i}: got={got:?} expected=Some({expected})"
+                        );
+                    }
+                }
+            }
+        }
+
+        if mismatches == 0 {
+            println!("  witness check      : ok");
+        } else {
+            println!("  witness check      : {mismatches} mismatches");
+        }
+    }
 
     let t_srs = Instant::now();
     let pk = <PCS as CommitmentScheme>::setup_prover(max_num_vars);
@@ -147,7 +229,7 @@ fn main() {
     let srs_ms = t_srs.elapsed().as_millis();
     println!("  SRS time   : {srs_ms} ms");
 
-    let mut prove_transcript = KeccakTranscript::new(b"bool-shout");
+    let mut prove_transcript = KeccakTranscript::new(b"shout-gate");
     prove_transcript.append_u64(trace.len() as u64);
     prove_transcript.append_u64(cycles as u64);
     for &b in &inputs {
@@ -159,7 +241,7 @@ fn main() {
 
     println!("\n  Proving…");
     let t_prove = Instant::now();
-    let proof = shout_gate::prove_shout_gate(
+    let prove_output = shout_gate::prove_shout_gate(
         &type_order,
         &trace,
         &type_index_of,
@@ -169,9 +251,69 @@ fn main() {
         &mut prove_transcript,
     );
     let prove_ms = t_prove.elapsed().as_millis();
+    let proof = prove_output.proof;
     println!("  Prover time: {prove_ms} ms");
+    println!("  phase-A breakdown:");
+    println!(
+        "    dense table build : {} ms",
+        prove_output.stats.dense_table_build_ms
+    );
+    println!(
+        "    batch_val build   : {} ms",
+        prove_output.stats.batch_val_build_ms
+    );
+    println!(
+        "    comm_bv           : {} ms",
+        prove_output.stats.comm_bv_ms
+    );
+    println!(
+        "    cycle sumcheck    : {} ms",
+        prove_output.stats.cycle_sumcheck_ms
+    );
+    println!(
+        "    G_agg build       : {} ms",
+        prove_output.stats.g_agg_build_ms
+    );
+    println!(
+        "    comm_g            : {} ms",
+        prove_output.stats.comm_g_ms
+    );
+    println!(
+        "    address sumcheck  : {} ms",
+        prove_output.stats.address_sumcheck_ms
+    );
+    println!(
+        "    opening generation: {} ms",
+        prove_output.stats.opening_generation_ms
+    );
+    println!("  dense sizes:");
+    println!(
+        "    t_pad * 2^k       : {}",
+        prove_output.stats.t_pad * (1usize << k)
+    );
+    println!(
+        "    mega_table.len()  : {}",
+        prove_output.stats.mega_table_len
+    );
+    println!(
+        "    batch_val.len()   : {}",
+        prove_output.stats.batch_val_len
+    );
+    println!(
+        "    batch_val storage : {} bytes (compact u8)",
+        prove_output.stats.batch_val_compact_bytes
+    );
+    println!("    G_agg.len()       : {}", prove_output.stats.g_agg_len);
+    println!(
+        "    committed len     : {}",
+        prove_output.stats.selector_vec_len
+    );
+    println!(
+        "    peak dense elems  : {} (estimated)",
+        prove_output.stats.peak_dense_elems_estimate
+    );
 
-    let mut verify_transcript = KeccakTranscript::new(b"bool-shout");
+    let mut verify_transcript = KeccakTranscript::new(b"shout-gate");
     verify_transcript.append_u64(trace.len() as u64);
     verify_transcript.append_u64(cycles as u64);
     for &b in &inputs {

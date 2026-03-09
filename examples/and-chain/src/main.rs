@@ -8,14 +8,18 @@ pub fn main() {
         .init();
 
     let save_to_disk = std::env::args().any(|arg| arg == "--save");
-    
+
     // Default to 2^20 (1,048,576 AND gates)
     let chain_length: u32 = std::env::args()
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(1 << 20); // 2^20 = 1,048,576
-    
-    println!("Running AND chain with {} operations (2^{:.1})", chain_length, (chain_length as f64).log2());
+
+    println!(
+        "Running AND chain with {} operations (2^{:.1})",
+        chain_length,
+        (chain_length as f64).log2()
+    );
     info!("Running AND chain with {} operations", chain_length);
 
     let target_dir = "/tmp/jolt-guest-targets";
@@ -41,7 +45,7 @@ pub fn main() {
     let verify_and_chain = guest::build_verifier_and_chain(verifier_preprocessing);
 
     let input = 0xFFFFFFFF;
-    
+
     let program_summary = guest::analyze_and_chain(input, chain_length);
     program_summary
         .write_to_file("and_chain.txt".into())
@@ -70,17 +74,21 @@ pub fn main() {
     let now = Instant::now();
     let is_valid = verify_and_chain(input, chain_length, output, io_device.panic, proof);
     let verifier_time = now.elapsed().as_secs_f64();
-    
+
     println!("\n=== Results ===");
     println!("Input: 0x{:08X}", input);
-    println!("Chain length: {} (2^{:.1})", chain_length, (chain_length as f64).log2());
+    println!(
+        "Chain length: {} (2^{:.1})",
+        chain_length,
+        (chain_length as f64).log2()
+    );
     println!("Output: 0x{:08X}", output);
     println!("Prover time: {:.2} s", prover_time);
     println!("Verifier time: {:.2} s", verifier_time);
     println!("Valid: {}", is_valid);
-    
+
     info!("Verification complete. Valid: {}", is_valid);
-    
+
     if !is_valid {
         panic!("Verification failed!");
     }

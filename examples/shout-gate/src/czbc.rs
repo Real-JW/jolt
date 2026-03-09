@@ -171,7 +171,11 @@ pub fn evaluate_circuit(circ: &Circ, inputs: &[bool], cycles: u32) -> (Vec<GateE
         }
         for op in &circ.ops {
             let a = wires[op.a as usize];
-            let b = if op.b == NOT_SENTINEL { a } else { wires[op.b as usize] };
+            let b = if op.b == NOT_SENTINEL {
+                a
+            } else {
+                wires[op.b as usize]
+            };
             let mask = opcode_mask(op.opcode);
             let idx = ((a as u8) << 1) | (b as u8);
             let out = (mask >> idx) & 1 == 1;
@@ -201,4 +205,3 @@ pub fn gate_type_order(circ: &Circ) -> Vec<u8> {
     }
     out
 }
-

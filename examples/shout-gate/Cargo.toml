@@ -1,10 +1,10 @@
 [package]
-name = "bool-shout"
+name = "shout-gate"
 version = "0.1.0"
 edition = "2021"
 
 # Standalone host-side Shout lookup proof for boolean gate circuits (.czbc).
-# Unlike `bool-lut --shout-gate`, this example does **not** convert gates into
+# Unlike `shout-lut --shout-gate`, this example does **not** convert gates into
 # merged LUT cones. It proves correctness of gate truth-table lookups directly.
 
 [dependencies]
@@ -16,4 +16,3 @@ ark-serialize = { workspace = true }
 
 [dev-dependencies]
 serial_test = { workspace = true }
-

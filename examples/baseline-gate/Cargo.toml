@@ -1,5 +1,5 @@
 [package]
-name = "lut-shout"
+name = "baseline-gate"
 version = "0.1.0"
 edition = "2021"
 

@@ -47,7 +47,7 @@ use std::io::{self, Read};
 use std::path::Path;
 
 // ── format constants ────────────────────────────────────────────────────────
-pub const MAGIC: u32   = 0x4C435A43; // 'LCZC'
+pub const MAGIC: u32 = 0x4C435A43; // 'LCZC'
 pub const VERSION: u16 = 2;
 
 // ── binary helpers ───────────────────────────────────────────────────────────
@@ -61,7 +61,10 @@ fn ru8(d: &[u8], o: &mut usize) -> io::Result<u8> {
 
 fn ru16(d: &[u8], o: &mut usize) -> io::Result<u16> {
     if *o + 2 > d.len() {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof"));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "unexpected eof",
+        ));
     }
     let v = u16::from_le_bytes([d[*o], d[*o + 1]]);
     *o += 2;
@@ -70,7 +73,10 @@ fn ru16(d: &[u8], o: &mut usize) -> io::Result<u16> {
 
 fn ru32(d: &[u8], o: &mut usize) -> io::Result<u32> {
     if *o + 4 > d.len() {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof"));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "unexpected eof",
+        ));
     }
     let v = u32::from_le_bytes([d[*o], d[*o + 1], d[*o + 2], d[*o + 3]]);
     *o += 4;
@@ -169,13 +175,13 @@ pub fn load_lut_circuit(path: &Path) -> io::Result<LutCirc> {
             format!("unsupported .lczbc version {version} (expected {VERSION})"),
         ));
     }
-    let _flags       = ru16(&raw, &mut o)?;
-    let num_wires    = ru32(&raw, &mut o)? as usize;
-    let n_in         = ru32(&raw, &mut o)? as usize;
-    let n_reg        = ru32(&raw, &mut o)? as usize;
-    let n_out        = ru32(&raw, &mut o)? as usize;
-    let n_lut_types  = ru32(&raw, &mut o)? as usize;
-    let n_ops        = ru32(&raw, &mut o)? as usize;
+    let _flags = ru16(&raw, &mut o)?;
+    let num_wires = ru32(&raw, &mut o)? as usize;
+    let n_in = ru32(&raw, &mut o)? as usize;
+    let n_reg = ru32(&raw, &mut o)? as usize;
+    let n_out = ru32(&raw, &mut o)? as usize;
+    let n_lut_types = ru32(&raw, &mut o)? as usize;
+    let n_ops = ru32(&raw, &mut o)? as usize;
     let default_cycles = ru32(&raw, &mut o)?;
 
     // --- primary inputs ---
@@ -188,7 +194,7 @@ pub fn load_lut_circuit(path: &Path) -> io::Result<LutCirc> {
     let mut registers = Vec::with_capacity(n_reg);
     for _ in 0..n_reg {
         let rout = ru32(&raw, &mut o)?;
-        let rin  = ru32(&raw, &mut o)?;
+        let rin = ru32(&raw, &mut o)?;
         registers.push((rout, rin));
     }
 
@@ -202,11 +208,11 @@ pub fn load_lut_circuit(path: &Path) -> io::Result<LutCirc> {
     let mut lut_types: HashMap<u32, LutDesc> = HashMap::with_capacity(n_lut_types);
     for _ in 0..n_lut_types {
         let lut_id = ru32(&raw, &mut o)?;
-        let k      = ru8(&raw, &mut o)? as usize;
-        let m      = ru8(&raw, &mut o)? as usize;
+        let k = ru8(&raw, &mut o)? as usize;
+        let m = ru8(&raw, &mut o)? as usize;
         let _reserved = ru16(&raw, &mut o)?; // skip 2 reserved bytes
 
-        let table_bits  = (1usize << k) * m;
+        let table_bits = (1usize << k) * m;
         let table_bytes = (table_bits + 7) / 8;
         if o + table_bytes > raw.len() {
             return Err(io::Error::new(
@@ -219,14 +225,19 @@ pub fn load_lut_circuit(path: &Path) -> io::Result<LutCirc> {
 
         lut_types.insert(
             lut_id,
-            LutDesc { lut_id, k, m, truth_table },
+            LutDesc {
+                lut_id,
+                k,
+                m,
+                truth_table,
+            },
         );
     }
 
     // --- op stream ---
     let mut ops = Vec::with_capacity(n_ops);
     for op_idx in 0..n_ops {
-        let lut_id   = ru32(&raw, &mut o)?;
+        let lut_id = ru32(&raw, &mut o)?;
         let dst_wire = ru32(&raw, &mut o)?;
 
         let k = lut_types
@@ -244,7 +255,11 @@ pub fn load_lut_circuit(path: &Path) -> io::Result<LutCirc> {
             src_wires.push(ru32(&raw, &mut o)?);
         }
 
-        ops.push(LutOp { lut_id, dst_wire, src_wires });
+        ops.push(LutOp {
+            lut_id,
+            dst_wire,
+            src_wires,
+        });
     }
 
     Ok(LutCirc {
@@ -326,15 +341,9 @@ pub fn evaluate_lut_circuit(
         // Evaluate LUT ops in topological order
         for op in &circ.ops {
             let desc = &circ.lut_types[&op.lut_id];
-            let in_vals: Vec<bool> = op
-                .src_wires
-                .iter()
-                .map(|&w| wires[w as usize])
-                .collect();
+            let in_vals: Vec<bool> = op.src_wires.iter().map(|&w| wires[w as usize]).collect();
 
-            let out_vals: Vec<bool> = (0..desc.m)
-                .map(|j| desc.eval_bool(&in_vals, j))
-                .collect();
+            let out_vals: Vec<bool> = (0..desc.m).map(|j| desc.eval_bool(&in_vals, j)).collect();
 
             // Write output bits to destination wires
             for (j, &v) in out_vals.iter().enumerate() {
@@ -342,8 +351,8 @@ pub fn evaluate_lut_circuit(
             }
 
             trace.push(LutEval {
-                lut_id:  op.lut_id,
-                inputs:  in_vals,
+                lut_id: op.lut_id,
+                inputs: in_vals,
                 outputs: out_vals,
             });
         }
@@ -354,11 +363,7 @@ pub fn evaluate_lut_circuit(
         }
     }
 
-    let final_outputs: Vec<bool> = circ
-        .outputs
-        .iter()
-        .map(|&w| wires[w as usize])
-        .collect();
+    let final_outputs: Vec<bool> = circ.outputs.iter().map(|&w| wires[w as usize]).collect();
 
     (trace, final_outputs)
 }
@@ -373,9 +378,9 @@ mod tests {
     fn make_and_lut() -> LutDesc {
         // 2-input AND: truth table = 0b0001 = 0x01
         LutDesc {
-            lut_id:      0,
-            k:           2,
-            m:           1,
+            lut_id: 0,
+            k: 2,
+            m: 1,
             truth_table: vec![0x08], // AND mask matching czbc: (a=1,b=1)→1
         }
     }
@@ -383,9 +388,9 @@ mod tests {
     fn make_xor_lut() -> LutDesc {
         // 2-input XOR: truth table = 0b0110 = 0x06
         LutDesc {
-            lut_id:      1,
-            k:           2,
-            m:           1,
+            lut_id: 1,
+            k: 2,
+            m: 1,
             truth_table: vec![0x06],
         }
     }
@@ -394,18 +399,18 @@ mod tests {
     fn lut_eval_bool_and() {
         let lut = make_and_lut();
         assert!(!lut.eval_bool(&[false, false], 0));
-        assert!(!lut.eval_bool(&[true,  false], 0));
-        assert!(!lut.eval_bool(&[false, true],  0));
-        assert!( lut.eval_bool(&[true,  true],  0));
+        assert!(!lut.eval_bool(&[true, false], 0));
+        assert!(!lut.eval_bool(&[false, true], 0));
+        assert!(lut.eval_bool(&[true, true], 0));
     }
 
     #[test]
     fn lut_eval_bool_xor() {
         let lut = make_xor_lut();
         assert!(!lut.eval_bool(&[false, false], 0));
-        assert!( lut.eval_bool(&[true,  false], 0));
-        assert!( lut.eval_bool(&[false, true],  0));
-        assert!(!lut.eval_bool(&[true,  true],  0));
+        assert!(lut.eval_bool(&[true, false], 0));
+        assert!(lut.eval_bool(&[false, true], 0));
+        assert!(!lut.eval_bool(&[true, true], 0));
     }
 
     /// Simulate a tiny circuit:   out = (a XOR b)
@@ -416,14 +421,14 @@ mod tests {
         lut_types.insert(1u32, xor_lut);
 
         let circ = LutCirc {
-            num_wires:      3,
+            num_wires: 3,
             primary_inputs: vec![0, 1],
-            registers:      vec![],
-            outputs:        vec![2],
+            registers: vec![],
+            outputs: vec![2],
             lut_types,
             ops: vec![LutOp {
-                lut_id:    1,
-                dst_wire:  2,
+                lut_id: 1,
+                dst_wire: 2,
                 src_wires: vec![0, 1],
             }],
             default_cycles: 1,
@@ -431,7 +436,7 @@ mod tests {
 
         let (trace, outs) = evaluate_lut_circuit(&circ, &[true, false], 1);
         assert_eq!(trace.len(), 1);
-        assert_eq!(trace[0].outputs[0], true);  // 1 XOR 0 = 1
+        assert_eq!(trace[0].outputs[0], true); // 1 XOR 0 = 1
         assert_eq!(outs[0], true);
 
         let (trace2, outs2) = evaluate_lut_circuit(&circ, &[true, true], 1);

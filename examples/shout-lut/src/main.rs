@@ -116,7 +116,12 @@ fn load_circuit(path: &Path) -> io::Result<Circ> {
             4 => OpCode::Not,
             _ => panic!("opcode {op}"),
         };
-        ops.push(Op { opcode: opc, dst, a, b });
+        ops.push(Op {
+            opcode: opc,
+            dst,
+            a,
+            b,
+        });
     }
     Ok(Circ {
         _num_wires: num_wires,
@@ -195,48 +200,47 @@ fn gate_circ_to_lut_circ(circ: &Circ, k: usize) -> lut_czbc::LutCirc {
     };
 
     // Helper: evaluate a cone's truth table for all 2^k input combos.
-    let eval_truth_table =
-        |cone: &BTreeSet<usize>, output_wire: u32, inputs: &[u32]| -> Vec<u8> {
-            let k_actual = inputs.len();
-            let n_entries = 1usize << k_actual;
-            // Sort cone by gate index (preserves topo order).
-            let cone_sorted: Vec<usize> = cone.iter().copied().collect();
+    let eval_truth_table = |cone: &BTreeSet<usize>, output_wire: u32, inputs: &[u32]| -> Vec<u8> {
+        let k_actual = inputs.len();
+        let n_entries = 1usize << k_actual;
+        // Sort cone by gate index (preserves topo order).
+        let cone_sorted: Vec<usize> = cone.iter().copied().collect();
 
-            let mut results = Vec::with_capacity(n_entries);
-            for combo in 0..n_entries {
-                let mut wire_val: HashMap<u32, bool> = HashMap::new();
-                for (bit_pos, &w) in inputs.iter().enumerate() {
-                    wire_val.insert(w, (combo >> bit_pos) & 1 == 1);
-                }
-                for &gi in &cone_sorted {
-                    let g = &gates[gi];
-                    let a_val = wire_val.get(&g.a).copied().unwrap_or(false);
-                    let b_val = if g.b == NOT_SENTINEL {
-                        a_val
-                    } else {
-                        wire_val.get(&g.b).copied().unwrap_or(false)
-                    };
-                    let out = match g.opcode {
-                        OpCode::And => a_val & b_val,
-                        OpCode::Or  => a_val | b_val,
-                        OpCode::Xor => a_val ^ b_val,
-                        OpCode::Not => !a_val,
-                    };
-                    wire_val.insert(g.dst, out);
-                }
-                results.push(wire_val.get(&output_wire).copied().unwrap_or(false));
+        let mut results = Vec::with_capacity(n_entries);
+        for combo in 0..n_entries {
+            let mut wire_val: HashMap<u32, bool> = HashMap::new();
+            for (bit_pos, &w) in inputs.iter().enumerate() {
+                wire_val.insert(w, (combo >> bit_pos) & 1 == 1);
             }
+            for &gi in &cone_sorted {
+                let g = &gates[gi];
+                let a_val = wire_val.get(&g.a).copied().unwrap_or(false);
+                let b_val = if g.b == NOT_SENTINEL {
+                    a_val
+                } else {
+                    wire_val.get(&g.b).copied().unwrap_or(false)
+                };
+                let out = match g.opcode {
+                    OpCode::And => a_val & b_val,
+                    OpCode::Or => a_val | b_val,
+                    OpCode::Xor => a_val ^ b_val,
+                    OpCode::Not => !a_val,
+                };
+                wire_val.insert(g.dst, out);
+            }
+            results.push(wire_val.get(&output_wire).copied().unwrap_or(false));
+        }
 
-            // Pack into bytes, LSB-first.
-            let num_bytes = (n_entries + 7) / 8;
-            let mut table = vec![0u8; num_bytes];
-            for (i, &r) in results.iter().enumerate() {
-                if r {
-                    table[i / 8] |= 1 << (i % 8);
-                }
+        // Pack into bytes, LSB-first.
+        let num_bytes = (n_entries + 7) / 8;
+        let mut table = vec![0u8; num_bytes];
+        for (i, &r) in results.iter().enumerate() {
+            if r {
+                table[i / 8] |= 1 << (i % 8);
             }
-            table
-        };
+        }
+        table
+    };
 
     // ── Greedy covering: process gates in reverse topo order ─────────────
     let mut assigned: HashSet<usize> = HashSet::new();
@@ -308,7 +312,13 @@ fn gate_circ_to_lut_circ(circ: &Circ, k: usize) -> lut_czbc::LutCirc {
         let next_id = table_to_id.len() as u32;
         let lut_id = *table_to_id.entry(key).or_insert(next_id);
 
-        lut_nodes.push((lut_id, inputs_list.len(), truth_bytes, inputs_list, g_root.dst));
+        lut_nodes.push((
+            lut_id,
+            inputs_list.len(),
+            truth_bytes,
+            inputs_list,
+            g_root.dst,
+        ));
         for &gi in &cone {
             assigned.insert(gi);
         }
@@ -321,12 +331,14 @@ fn gate_circ_to_lut_circ(circ: &Circ, k: usize) -> lut_czbc::LutCirc {
     let mut lut_types: HashMap<u32, lut_czbc::LutDesc> = HashMap::new();
     let mut ops: Vec<lut_czbc::LutOp> = Vec::with_capacity(lut_nodes.len());
     for &(lut_id, k_val, ref tt, ref inputs, dst) in &lut_nodes {
-        lut_types.entry(lut_id).or_insert_with(|| lut_czbc::LutDesc {
-            lut_id,
-            k: k_val,
-            m: 1,
-            truth_table: tt.clone(),
-        });
+        lut_types
+            .entry(lut_id)
+            .or_insert_with(|| lut_czbc::LutDesc {
+                lut_id,
+                k: k_val,
+                m: 1,
+                truth_table: tt.clone(),
+            });
         ops.push(lut_czbc::LutOp {
             lut_id,
             dst_wire: dst,
@@ -334,8 +346,13 @@ fn gate_circ_to_lut_circ(circ: &Circ, k: usize) -> lut_czbc::LutCirc {
         });
     }
 
-    println!("  gate_circ_to_lut_circ: {} gates → {} LUTs ({} types, k={})",
-        n_gates, ops.len(), lut_types.len(), k);
+    println!(
+        "  gate_circ_to_lut_circ: {} gates → {} LUTs ({} types, k={})",
+        n_gates,
+        ops.len(),
+        lut_types.len(),
+        k
+    );
 
     lut_czbc::LutCirc {
         num_wires: circ._num_wires as usize,
@@ -355,8 +372,18 @@ fn tiny_circuit() -> Circ {
         registers: vec![],
         outputs: vec![3],
         ops: vec![
-            Op { opcode: OpCode::Not, dst: 2, a: 0, b: NOT_SENTINEL },
-            Op { opcode: OpCode::Xor, dst: 3, a: 2, b: 1 },
+            Op {
+                opcode: OpCode::Not,
+                dst: 2,
+                a: 0,
+                b: NOT_SENTINEL,
+            },
+            Op {
+                opcode: OpCode::Xor,
+                dst: 3,
+                a: 2,
+                b: 1,
+            },
         ],
         default_cycles: 1,
     }
@@ -390,8 +417,12 @@ enum Mode {
 fn print_usage(bin: &str) {
     eprintln!("Usage:");
     eprintln!("  {bin} --tiny [input-bits] [--cycles N] [--show-pages] [--bench-csv <file>]");
-    eprintln!("  {bin} <bytecode.czbc>  [input-bits] [--cycles N] [--show-pages] [--bench-csv <file>]");
-    eprintln!("  {bin} --shout-gate   <circuit.czbc>  [input-bits] [--cycles N] [--bench-csv <file>]");
+    eprintln!(
+        "  {bin} <bytecode.czbc>  [input-bits] [--cycles N] [--show-pages] [--bench-csv <file>]"
+    );
+    eprintln!(
+        "  {bin} --shout-gate   <circuit.czbc>  [input-bits] [--cycles N] [--bench-csv <file>]"
+    );
     eprintln!();
     eprintln!("Flags:");
     eprintln!("  --shout-gate        Phase S* Shout prover on a raw gate circuit (.czbc);");
@@ -426,8 +457,11 @@ fn main() {
                 i += 1;
             }
             "--cycles" => {
-                cycles_override =
-                    Some(args[i + 1].parse().unwrap_or_else(|_| panic!("bad --cycles")));
+                cycles_override = Some(
+                    args[i + 1]
+                        .parse()
+                        .unwrap_or_else(|_| panic!("bad --cycles")),
+                );
                 i += 2;
             }
             "--bench-csv" => {
@@ -455,8 +489,8 @@ fn main() {
             token => {
                 if mode.is_none() {
                     let p = PathBuf::from(token);
-                    let is_czbc = force_shout_gate
-                        || p.extension().map(|e| e == "czbc").unwrap_or(false);
+                    let is_czbc =
+                        force_shout_gate || p.extension().map(|e| e == "czbc").unwrap_or(false);
                     mode = Some(if is_czbc {
                         Mode::ShoutGate(p)
                     } else {
@@ -480,8 +514,7 @@ fn main() {
     // Merges individual gates into k-input LUTs first (greedy cone-growing).
     if let Some(Mode::ShoutGate(ref p)) = mode {
         let label = p.display().to_string();
-        let raw_circ = load_circuit(p)
-            .unwrap_or_else(|e| panic!("load {}: {e}", p.display()));
+        let raw_circ = load_circuit(p).unwrap_or_else(|e| panic!("load {}: {e}", p.display()));
 
         let input_bits: Vec<bool> = input_bits_raw
             .as_deref()
@@ -490,12 +523,18 @@ fn main() {
             .unwrap_or_else(|e| panic!("{e}"))
             .unwrap_or_default();
 
-        let default_cycles = if raw_circ.default_cycles == 0 { 1 } else { raw_circ.default_cycles };
+        let default_cycles = if raw_circ.default_cycles == 0 {
+            1
+        } else {
+            raw_circ.default_cycles
+        };
         let cycles = cycles_override.unwrap_or(default_cycles).max(1);
 
         let mut inputs = vec![false; raw_circ.primary_inputs.len()];
         for (j, &b) in input_bits.iter().enumerate() {
-            if j < inputs.len() { inputs[j] = b; }
+            if j < inputs.len() {
+                inputs[j] = b;
+            }
         }
 
         println!("Circuit (Shout on gate circuit — Phase S*, with LUT merging) : {label}");
@@ -508,7 +547,7 @@ fn main() {
 
         // ── Gate merging: convert raw Circ → LutCirc (greedy cone-growing) ───
         let t_merge = Instant::now();
-        let circ = gate_circ_to_lut_circ(&raw_circ, 4);
+        let circ = gate_circ_to_lut_circ(&raw_circ, 6);
         let merge_ms = t_merge.elapsed().as_millis();
         println!("  merge time : {merge_ms} ms");
         println!("  lut ops    : {}", circ.ops.len());
@@ -517,7 +556,10 @@ fn main() {
         let mut type_order: Vec<u32> = circ.lut_types.keys().copied().collect();
         type_order.sort();
         let type_index_of: std::collections::HashMap<u32, usize> = type_order
-            .iter().enumerate().map(|(i, &id)| (id, i)).collect();
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| (id, i))
+            .collect();
 
         // Validate LUT wrappers.
         println!("\nLUT wrapper validation:");
@@ -531,7 +573,10 @@ fn main() {
                         == ((desc.truth_table[bit_pos / 8] >> (bit_pos % 8)) as u64 & 1)
                 });
                 if tid < 10 || !ok {
-                    println!("  lut_id={lut_id:>4}  type_idx={tid}  k={}  MLE-wrapper-ok={ok}", desc.k);
+                    println!(
+                        "  lut_id={lut_id:>4}  type_idx={tid}  k={}  MLE-wrapper-ok={ok}",
+                        desc.k
+                    );
                 }
             }
         }
@@ -541,12 +586,19 @@ fn main() {
         use lut_czbc::evaluate_lut_circuit;
         let (trace, final_outputs) = evaluate_lut_circuit(&circ, &inputs, cycles);
 
-        let out_bits: String = final_outputs.iter().map(|&b| if b { '1' } else { '0' }).collect();
+        let out_bits: String = final_outputs
+            .iter()
+            .map(|&b| if b { '1' } else { '0' })
+            .collect();
         println!("\nCircuit outputs (cycle {cycles}): {out_bits}");
-        let all_one  = final_outputs.iter().all(|&b| b);
+        let all_one = final_outputs.iter().all(|&b| b);
         let all_zero = final_outputs.iter().all(|&b| !b);
-        if all_one  { println!("  WARNING: all outputs are 1 — check gate inputs."); }
-        if all_zero { println!("  WARNING: all outputs are 0 — check gate inputs."); }
+        if all_one {
+            println!("  WARNING: all outputs are 1 — check gate inputs.");
+        }
+        if all_zero {
+            println!("  WARNING: all outputs are 0 — check gate inputs.");
+        }
 
         let k = circ.lut_types.values().map(|d| d.k).max().unwrap_or(0);
         let n_types = type_order.len();
@@ -558,22 +610,31 @@ fn main() {
         println!("  k (uniform input bits) : {k}");
         println!("  n_types                : {n_types}");
         println!("  total_address_bits     : {}", params.total_address_bits);
-        println!("  trace rows             : {}  (t_total={t_total})", trace.len());
+        println!(
+            "  trace rows             : {}  (t_total={t_total})",
+            trace.len()
+        );
 
         let _ = DoryGlobals::initialize(params.k_chunk, t_total);
 
         let t_s2 = Instant::now();
-        let witnesses = shout_lut::build_shout_witnesses(
-            &trace, &type_index_of, k, &params, t_total,
-        );
+        let witnesses =
+            shout_lut::build_shout_witnesses(&trace, &type_index_of, k, &params, t_total);
         let s2_elapsed = t_s2.elapsed();
-        println!("  witnesses built: {} (time: {:.3?})", witnesses.len(), s2_elapsed);
+        println!(
+            "  witnesses built: {} (time: {:.3?})",
+            witnesses.len(),
+            s2_elapsed
+        );
         println!("✓  Trace simulation complete.");
 
         // Shout prover + verifier.
         let max_num_vars = shout_lut::shout_max_num_vars(n_types, k, cycles, circ.ops.len());
         println!("\nShout prover + verifier:");
-        println!("  SRS size   : 2^{max_num_vars} = {} G1 points", 1usize << max_num_vars);
+        println!(
+            "  SRS size   : 2^{max_num_vars} = {} G1 points",
+            1usize << max_num_vars
+        );
 
         let t_srs = Instant::now();
         let pk = <PCS as CommitmentScheme>::setup_prover(max_num_vars);
@@ -584,12 +645,20 @@ fn main() {
         let mut prove_transcript = KeccakTranscript::new(b"shout-gate");
         prove_transcript.append_u64(circ.ops.len() as u64);
         prove_transcript.append_u64(cycles as u64);
-        for &b in &inputs { prove_transcript.append_u64(b as u64); }
+        for &b in &inputs {
+            prove_transcript.append_u64(b as u64);
+        }
 
         println!("\n  Proving…");
         let t_prove = Instant::now();
         let shout_proof = shout_lut::prove_shout_lut(
-            &circ.lut_types, &trace, &type_index_of, k, t_total, &pk, &mut prove_transcript,
+            &circ.lut_types,
+            &trace,
+            &type_index_of,
+            k,
+            t_total,
+            &pk,
+            &mut prove_transcript,
         );
         let prove_ms = t_prove.elapsed().as_millis();
         println!("  Prover time: {prove_ms} ms");
@@ -597,13 +666,14 @@ fn main() {
         let mut verify_transcript = KeccakTranscript::new(b"shout-gate");
         verify_transcript.append_u64(circ.ops.len() as u64);
         verify_transcript.append_u64(cycles as u64);
-        for &b in &inputs { verify_transcript.append_u64(b as u64); }
+        for &b in &inputs {
+            verify_transcript.append_u64(b as u64);
+        }
 
         println!("\n  Verifying…");
         let t_verify = Instant::now();
-        let ok = shout_lut::verify_shout_lut(
-            &shout_proof, &circ.lut_types, &vk, &mut verify_transcript,
-        );
+        let ok =
+            shout_lut::verify_shout_lut(&shout_proof, &circ.lut_types, &vk, &mut verify_transcript);
         let verify_ms = t_verify.elapsed().as_millis();
         println!("  Verifier time: {verify_ms} ms");
 
@@ -615,8 +685,8 @@ fn main() {
         }
 
         if let Some(ref csv_path) = bench_csv {
-            let proof_size  = shout_lut::compute_shout_proof_size_bytes(&shout_proof);
-            let srs_size    = 1usize << max_num_vars;
+            let proof_size = shout_lut::compute_shout_proof_size_bytes(&shout_proof);
+            let srs_size = 1usize << max_num_vars;
             let total_evals = trace.len();
 
             let write_header = !csv_path.exists();
@@ -631,7 +701,8 @@ fn main() {
                     file,
                     "circuit,gates,cycles,total_evals,max_sumcheck_vars,srs_g1_points,\
                      srs_time_ms,prove_time_ms,verify_time_ms,proof_size_bytes,num_lut_types"
-                ).expect("write CSV header");
+                )
+                .expect("write CSV header");
             }
             writeln!(
                 file,
@@ -647,7 +718,6 @@ fn main() {
 
         return;
     }
-
 
     // ── Bytecode (.lczbc) / Tiny path ───────────────────────────────────────
     let (label, lut_circ) = match mode {
@@ -675,11 +745,17 @@ fn main() {
         .unwrap_or_else(|e| panic!("{e}"))
         .unwrap_or_default();
 
-    let default_cycles = if lut_circ.default_cycles == 0 { 1 } else { lut_circ.default_cycles };
+    let default_cycles = if lut_circ.default_cycles == 0 {
+        1
+    } else {
+        lut_circ.default_cycles
+    };
     let cycles = cycles_override.unwrap_or(default_cycles).max(1);
     let mut inputs = vec![false; lut_circ.primary_inputs.len()];
     for (j, &b) in input_bits.iter().enumerate() {
-        if j < inputs.len() { inputs[j] = b; }
+        if j < inputs.len() {
+            inputs[j] = b;
+        }
     }
 
     println!("Circuit (Shout LUT prover): {label}");
@@ -694,12 +770,18 @@ fn main() {
     let mut type_order: Vec<u32> = lut_circ.lut_types.keys().copied().collect();
     type_order.sort();
     let type_index_of: std::collections::HashMap<u32, usize> = type_order
-        .iter().enumerate().map(|(i, &id)| (id, i)).collect();
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| (id, i))
+        .collect();
 
     use lut_czbc::evaluate_lut_circuit;
     let (trace, final_outputs) = evaluate_lut_circuit(&lut_circ, &inputs, cycles);
 
-    let out_bits: String = final_outputs.iter().map(|&b| if b { '1' } else { '0' }).collect();
+    let out_bits: String = final_outputs
+        .iter()
+        .map(|&b| if b { '1' } else { '0' })
+        .collect();
     println!("\nCircuit outputs (cycle {cycles}): {out_bits}");
 
     let k = lut_circ.lut_types.values().map(|d| d.k).max().unwrap_or(0);
@@ -713,28 +795,41 @@ fn main() {
     let pk = <PCS as CommitmentScheme>::setup_prover(max_num_vars);
     let vk = <PCS as CommitmentScheme>::setup_verifier(&pk);
 
-    let mut prove_transcript = KeccakTranscript::new(b"bool-lut");
+    let mut prove_transcript = KeccakTranscript::new(b"shout-lut");
     prove_transcript.append_u64(lut_circ.ops.len() as u64);
     prove_transcript.append_u64(cycles as u64);
-    for &b in &inputs { prove_transcript.append_u64(b as u64); }
+    for &b in &inputs {
+        prove_transcript.append_u64(b as u64);
+    }
 
     println!("\n  Proving…");
     let t_prove = Instant::now();
     let shout_proof = shout_lut::prove_shout_lut(
-        &lut_circ.lut_types, &trace, &type_index_of, k, t_total, &pk, &mut prove_transcript,
+        &lut_circ.lut_types,
+        &trace,
+        &type_index_of,
+        k,
+        t_total,
+        &pk,
+        &mut prove_transcript,
     );
     let prove_ms = t_prove.elapsed().as_millis();
     println!("  Prover time: {prove_ms} ms");
 
-    let mut verify_transcript = KeccakTranscript::new(b"bool-lut");
+    let mut verify_transcript = KeccakTranscript::new(b"shout-lut");
     verify_transcript.append_u64(lut_circ.ops.len() as u64);
     verify_transcript.append_u64(cycles as u64);
-    for &b in &inputs { verify_transcript.append_u64(b as u64); }
+    for &b in &inputs {
+        verify_transcript.append_u64(b as u64);
+    }
 
     println!("\n  Verifying…");
     let t_verify = Instant::now();
     let ok = shout_lut::verify_shout_lut(
-        &shout_proof, &lut_circ.lut_types, &vk, &mut verify_transcript,
+        &shout_proof,
+        &lut_circ.lut_types,
+        &vk,
+        &mut verify_transcript,
     );
     let verify_ms = t_verify.elapsed().as_millis();
     println!("  Verifier time: {verify_ms} ms");
@@ -752,7 +847,8 @@ fn main() {
         let total_evals = trace.len();
         let write_header = !csv_path.exists();
         let mut file = OpenOptions::new()
-            .create(true).append(true)
+            .create(true)
+            .append(true)
             .open(csv_path)
             .unwrap_or_else(|e| panic!("cannot open {}: {e}", csv_path.display()));
         if write_header {
@@ -760,7 +856,8 @@ fn main() {
                 file,
                 "circuit,lut_ops,cycles,total_evals,max_sumcheck_vars,srs_g1_points,\
                  prove_time_ms,verify_time_ms,proof_size_bytes,num_lut_types"
-            ).expect("write CSV header");
+            )
+            .expect("write CSV header");
         }
         writeln!(
             file,

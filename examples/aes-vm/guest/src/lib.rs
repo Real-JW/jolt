@@ -17,7 +17,7 @@ const SBOX: [u8; 256] = [
     0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
     0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
     0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
-    0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16
+    0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
 ];
 
 // Round constants
@@ -40,17 +40,12 @@ fn rot_word(word: u32) -> u32 {
 // AES-128 key expansion
 fn key_expansion(key: &[u8; 16]) -> [u32; 44] {
     let mut w = [0u32; 44];
-    
+
     // First 4 words are the key itself
     for i in 0..4 {
-        w[i] = u32::from_be_bytes([
-            key[4 * i],
-            key[4 * i + 1],
-            key[4 * i + 2],
-            key[4 * i + 3],
-        ]);
+        w[i] = u32::from_be_bytes([key[4 * i], key[4 * i + 1], key[4 * i + 2], key[4 * i + 3]]);
     }
-    
+
     // Generate remaining words
     for i in 4..44 {
         let mut temp = w[i - 1];
@@ -59,7 +54,7 @@ fn key_expansion(key: &[u8; 16]) -> [u32; 44] {
         }
         w[i] = w[i - 4] ^ temp;
     }
-    
+
     w
 }
 
@@ -76,7 +71,7 @@ fn shift_rows(state: &mut [u8; 16]) {
     state[5] = state[9];
     state[9] = state[13];
     state[13] = temp;
-    
+
     // Row 2: shift left by 2
     let temp1 = state[2];
     let temp2 = state[6];
@@ -84,7 +79,7 @@ fn shift_rows(state: &mut [u8; 16]) {
     state[6] = state[14];
     state[10] = temp1;
     state[14] = temp2;
-    
+
     // Row 3: shift left by 3
     let temp = state[15];
     state[15] = state[11];
@@ -97,7 +92,7 @@ fn gmul(a: u8, b: u8) -> u8 {
     let mut p = 0u8;
     let mut a = a;
     let mut b = b;
-    
+
     for _ in 0..8 {
         if b & 1 != 0 {
             p ^= a;
@@ -109,7 +104,7 @@ fn gmul(a: u8, b: u8) -> u8 {
         }
         b >>= 1;
     }
-    
+
     p
 }
 
@@ -119,7 +114,7 @@ fn mix_columns(state: &mut [u8; 16]) {
         let s1 = state[i * 4 + 1];
         let s2 = state[i * 4 + 2];
         let s3 = state[i * 4 + 3];
-        
+
         state[i * 4] = gmul(s0, 2) ^ gmul(s1, 3) ^ s2 ^ s3;
         state[i * 4 + 1] = s0 ^ gmul(s1, 2) ^ gmul(s2, 3) ^ s3;
         state[i * 4 + 2] = s0 ^ s1 ^ gmul(s2, 2) ^ gmul(s3, 3);
@@ -141,30 +136,44 @@ fn add_round_key(state: &mut [u8; 16], round_key: &[u32; 4]) {
 fn aes_encrypt(plaintext: [u8; 16], key: [u8; 16], count: u32) -> [u8; 16] {
     let mut state = plaintext;
     let round_keys = key_expansion(&key);
-    
+
     // Run AES encryption 'count' times
     for _ in 0..count {
         // Initial round
-        add_round_key(&mut state, &[round_keys[0], round_keys[1], round_keys[2], round_keys[3]]);
-        
+        add_round_key(
+            &mut state,
+            &[round_keys[0], round_keys[1], round_keys[2], round_keys[3]],
+        );
+
         // Main rounds (9 rounds for AES-128)
         for round in 1..10 {
             sub_bytes(&mut state);
             shift_rows(&mut state);
             mix_columns(&mut state);
-            add_round_key(&mut state, &[
-                round_keys[round * 4],
-                round_keys[round * 4 + 1],
-                round_keys[round * 4 + 2],
-                round_keys[round * 4 + 3],
-            ]);
+            add_round_key(
+                &mut state,
+                &[
+                    round_keys[round * 4],
+                    round_keys[round * 4 + 1],
+                    round_keys[round * 4 + 2],
+                    round_keys[round * 4 + 3],
+                ],
+            );
         }
-        
+
         // Final round (no MixColumns)
         sub_bytes(&mut state);
         shift_rows(&mut state);
-        add_round_key(&mut state, &[round_keys[40], round_keys[41], round_keys[42], round_keys[43]]);
+        add_round_key(
+            &mut state,
+            &[
+                round_keys[40],
+                round_keys[41],
+                round_keys[42],
+                round_keys[43],
+            ],
+        );
     }
-    
+
     state
 }

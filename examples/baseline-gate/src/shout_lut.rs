@@ -36,7 +36,6 @@ use std::collections::HashMap;
 
 use ark_bn254::{Bn254, Fr};
 use ark_ff::{One, Zero};
-use ark_serialize::CanonicalSerialize;
 use serde::{Deserialize, Serialize};
 
 use jolt_core::field::{ChallengeFieldOps, FieldChallengeOps, JoltField};
@@ -48,7 +47,7 @@ use jolt_core::poly::one_hot_polynomial::OneHotPolynomial;
 use jolt_core::transcripts::{AppendToTranscript, KeccakTranscript, Transcript};
 use jolt_core::zkvm::lookup_table::{JoltLookupTable, SubCircuitLut};
 
-use crate::lut_czbc::{LutDesc, LutEval};
+use crate::lut_czbc::{LutCirc, LutDesc, LutEval};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LutShoutTable
@@ -126,7 +125,11 @@ impl JoltLookupTable for LutShoutTable {
     /// `index` is cast to `usize`; it must be in range `0..2^k`.
     fn materialize_entry(&self, index: u128) -> u64 {
         let idx = index as usize;
-        debug_assert!(idx < self.table_size(), "LutShoutTable: index {idx} out of range (2^k={})", self.table_size());
+        debug_assert!(
+            idx < self.table_size(),
+            "LutShoutTable: index {idx} out of range (2^k={})",
+            self.table_size()
+        );
         self.entry(idx)
     }
 
@@ -151,7 +154,8 @@ impl JoltLookupTable for LutShoutTable {
         F: JoltField + FieldChallengeOps<C>,
     {
         assert_eq!(
-            r.len(), self.k,
+            r.len(),
+            self.k,
             "LutShoutTable::evaluate_mle: expected {} vars, got {}",
             self.k,
             r.len()
@@ -159,9 +163,7 @@ impl JoltLookupTable for LutShoutTable {
         let n = self.table_size();
 
         // Initialise values from the selected output column.
-        let mut vals: Vec<F> = (0..n)
-            .map(|idx| F::from_u64(self.entry(idx)))
-            .collect();
+        let mut vals: Vec<F> = (0..n).map(|idx| F::from_u64(self.entry(idx))).collect();
 
         // Fold each variable in LSB-first order.
         // After binding variable i at r[i], the slice halves.
@@ -376,7 +378,12 @@ impl OneHotParams {
         let total_address_bits = mega_table_address_bits(t_pad, k);
         let d = total_address_bits.div_ceil(log_k_chunk);
         let k_chunk = 1usize << log_k_chunk;
-        OneHotParams { log_k_chunk, d, total_address_bits, k_chunk }
+        OneHotParams {
+            log_k_chunk,
+            d,
+            total_address_bits,
+            k_chunk,
+        }
     }
 }
 
@@ -446,10 +453,7 @@ pub fn build_shout_witnesses(
         .map(|ev| {
             let tid = *type_index_of
                 .get(&ev.lut_id)
-                .unwrap_or_else(|| panic!(
-                    "build_shout_witnesses: unknown lut_id={}",
-                    ev.lut_id
-                ));
+                .unwrap_or_else(|| panic!("build_shout_witnesses: unknown lut_id={}", ev.lut_id));
             ev.address_for_shout(tid, k)
         })
         .collect();
@@ -593,7 +597,7 @@ pub fn mle_eval_fr(entries: &[Fr], point: &[Fr]) -> Fr {
 /// * `k`          — uniform (padded) input-bit count
 /// * `alpha`      — Fiat-Shamir alpha challenge for multi-output batching
 pub fn build_mega_table_batched(
-    lut_types: &HashMap<u32, LutDesc>,
+    circ: &LutCirc,
     type_order: &[u32],
     k: usize,
     alpha: Fr,
@@ -605,7 +609,7 @@ pub fn build_mega_table_batched(
 
     let mut mega = vec![Fr::zero(); mega_size];
     for (tid, &lut_id) in type_order.iter().enumerate() {
-        let desc = &lut_types[&lut_id];
+        let desc = &circ.lut_types[&lut_id];
         let batched = alpha_batch_table_entries(desc, alpha);
         let k_lut = desc.k;
         // If k_lut < k, replicate the truth table for the extra MSBs (they are
@@ -701,7 +705,7 @@ pub struct ShoutLutProof {
 /// # Returns
 /// A [`ShoutLutProof`] whose validity can be checked with [`verify_shout_lut`].
 pub fn prove_shout_lut(
-    lut_types: &HashMap<u32, LutDesc>,
+    circ: &LutCirc,
     trace: &[LutEval],
     type_index_of: &HashMap<u32, usize>,
     k: usize,
@@ -728,7 +732,7 @@ pub fn prove_shout_lut(
     let alpha: Fr = transcript.challenge_scalar();
 
     // ── 2. Build alpha-batched mega-table ────────────────────────────────────
-    let mega_table = build_mega_table_batched(lut_types, &type_order, k, alpha);
+    let mega_table = build_mega_table_batched(circ, &type_order, k, alpha);
 
     // ── 3. Compute batch_val[j] for each trace row ───────────────────────────
     // batch_val[j] = mega_table[type_index[j] * 2^k + packed_input[j]]
@@ -887,11 +891,11 @@ pub fn prove_shout_lut(
         cycle_sc_polys,
         bv_eval,
         opening_bv,
-        comm_g: comm_g,
+        comm_g,
         addr_sc_polys,
-        final_g_eval: final_g_eval,
+        final_g_eval,
         final_table_eval,
-        opening_g: opening_g,
+        opening_g,
     }
 }
 
@@ -909,7 +913,7 @@ pub fn prove_shout_lut(
 /// Returns `true` iff all checks pass.
 pub fn verify_shout_lut(
     proof: &ShoutLutProof,
-    lut_types: &HashMap<u32, LutDesc>,
+    circ: &LutCirc,
     vk: &HyperKZGVerifierKey<Bn254>,
     transcript: &mut KeccakTranscript,
 ) -> bool {
@@ -949,9 +953,9 @@ pub fn verify_shout_lut(
     }
 
     // ── Reconstruct mega-table (public computation) ──────────────────────────
-    let mut type_order: Vec<u32> = lut_types.keys().copied().collect();
+    let mut type_order: Vec<u32> = circ.lut_types.keys().copied().collect();
     type_order.sort_unstable();
-    let mega_table = build_mega_table_batched(lut_types, &type_order, k, *alpha);
+    let mega_table = build_mega_table_batched(circ, &type_order, k, *alpha);
 
     // ── Absorb comm_bv → re-derive r_T ──────────────────────────────────────
     comm_bv.append_to_transcript(transcript);
@@ -1082,15 +1086,8 @@ pub fn verify_shout_lut(
     if *comm_g != zero_comm {
         match opening_g {
             Some(pf) => {
-                if HyperKZG::<Bn254>::verify(
-                    vk,
-                    comm_g,
-                    &point_g_kzg,
-                    final_g_eval,
-                    pf,
-                    transcript,
-                )
-                .is_err()
+                if HyperKZG::<Bn254>::verify(vk, comm_g, &point_g_kzg, final_g_eval, pf, transcript)
+                    .is_err()
                 {
                     eprintln!("verify_shout_lut: G_agg HyperKZG verify FAILED");
                     return false;
@@ -1104,43 +1101,6 @@ pub fn verify_shout_lut(
     }
 
     true
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Proof size helper
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Estimate the serialised byte size of a [`ShoutLutProof`].
-pub fn compute_shout_proof_size_bytes(proof: &ShoutLutProof) -> usize {
-    let mut total = 0usize;
-    let mut buf = Vec::new();
-
-    // 2 HyperKZG commitments (comm_bv, comm_g)
-    for comm in [&proof.comm_bv, &proof.comm_g] {
-        buf.clear();
-        comm.0.serialize_compressed(&mut buf).ok();
-        total += buf.len();
-    }
-
-    // Fiat-Shamir scalars: alpha + bv_eval + final_g_eval + final_table_eval
-    total += 4 * 32;
-
-    // Cycle sumcheck round polynomials (degree 2, 3 Fr each)
-    total += proof.cycle_sc_polys.len() * 3 * 32;
-
-    // Address sumcheck round polynomials (degree 2, 3 Fr each)
-    total += proof.addr_sc_polys.len() * 3 * 32;
-
-    // 2 HyperKZG opening proofs
-    for opt_pf in [&proof.opening_bv, &proof.opening_g] {
-        if let Some(pf) = opt_pf {
-            buf.clear();
-            pf.serialize_compressed(&mut buf).ok();
-            total += buf.len();
-        }
-    }
-
-    total
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1160,14 +1120,24 @@ mod tests {
     /// truth table (LSB-first index): AND[0b00]=0, AND[0b01]=0, AND[0b10]=0, AND[0b11]=1
     /// packed byte: bit 3 = 1 → 0b0000_1000 = 0x08
     fn and_desc() -> LutDesc {
-        LutDesc { lut_id: 0, k: 2, m: 1, truth_table: vec![0x08] }
+        LutDesc {
+            lut_id: 0,
+            k: 2,
+            m: 1,
+            truth_table: vec![0x08],
+        }
     }
 
     /// Build a 2-input XOR LutDesc.
     /// XOR[0b00]=0, XOR[0b01]=1, XOR[0b10]=1, XOR[0b11]=0
     /// packed byte: bits 1,2 = 1 → 0b0000_0110 = 0x06
     fn xor_desc() -> LutDesc {
-        LutDesc { lut_id: 1, k: 2, m: 1, truth_table: vec![0x06] }
+        LutDesc {
+            lut_id: 1,
+            k: 2,
+            m: 1,
+            truth_table: vec![0x06],
+        }
     }
 
     /// Build a 2-input, 2-output LutDesc where out0 = AND(a,b), out1 = OR(a,b).
@@ -1187,10 +1157,17 @@ mod tests {
     ///   bit 7 (idx=3,out=1) = OR(1,1)  = 1
     /// → byte = 0b1110_1000 = 0xE8
     fn and_or_desc() -> LutDesc {
-        LutDesc { lut_id: 2, k: 2, m: 2, truth_table: vec![0xE8] }
+        LutDesc {
+            lut_id: 2,
+            k: 2,
+            m: 2,
+            truth_table: vec![0xE8],
+        }
     }
 
-    fn fr(v: u64) -> Fr { Fr::from_u64(v) }
+    fn fr(v: u64) -> Fr {
+        Fr::from_u64(v)
+    }
 
     // ── LutShoutTable construction ─────────────────────────────────────────────
 
@@ -1237,7 +1214,13 @@ mod tests {
     fn mle_on_hypercube(t: &LutShoutTable) {
         for idx in 0usize..(1 << t.k) {
             let r: Vec<Fr> = (0..t.k)
-                .map(|i| if (idx >> i) & 1 == 1 { Fr::one() } else { Fr::zero() })
+                .map(|i| {
+                    if (idx >> i) & 1 == 1 {
+                        Fr::one()
+                    } else {
+                        Fr::zero()
+                    }
+                })
                 .collect();
             let got: Fr = t.evaluate_mle(&r);
             let expected = fr(t.materialize_entry(idx as u128));
@@ -1299,7 +1282,8 @@ mod tests {
         let shout = LutShoutTable::from_lut_desc(&desc, 0);
         for idx in 0..4 {
             assert_eq!(
-                sub.table[idx] & 1, shout.table[idx] & 1,
+                sub.table[idx] & 1,
+                shout.table[idx] & 1,
                 "SubCircuitLut vs LutShoutTable mismatch at idx={idx}"
             );
         }
@@ -1315,7 +1299,10 @@ mod tests {
         // With m=1, batched[idx] = α^0 * T_0[idx] = T_0[idx]
         for idx in 0..4 {
             let expected = fr((desc.truth_table[0] >> (idx * desc.m)) as u64 & 1);
-            assert_eq!(batched[idx], expected, "alpha-batch identity failed at idx={idx}");
+            assert_eq!(
+                batched[idx], expected,
+                "alpha-batch identity failed at idx={idx}"
+            );
         }
     }
 
@@ -1335,7 +1322,10 @@ mod tests {
             fr(1) + alpha * fr(1), // idx=3: AND=1, OR=1
         ];
         for idx in 0..4 {
-            assert_eq!(batched[idx], expected[idx], "alpha-batch two-output mismatch at idx={idx}");
+            assert_eq!(
+                batched[idx], expected[idx],
+                "alpha-batch two-output mismatch at idx={idx}"
+            );
         }
     }
 
@@ -1347,7 +1337,13 @@ mod tests {
 
         for idx in 0usize..4 {
             let r: Vec<Fr> = (0..2)
-                .map(|i| if (idx >> i) & 1 == 1 { Fr::one() } else { Fr::zero() })
+                .map(|i| {
+                    if (idx >> i) & 1 == 1 {
+                        Fr::one()
+                    } else {
+                        Fr::zero()
+                    }
+                })
                 .collect();
             let got = evaluate_batched_table_mle(&batched, &r);
             assert_eq!(
@@ -1438,12 +1434,12 @@ mod tests {
         vec![
             LutEval {
                 lut_id: 0,
-                inputs: vec![true, true],   // AND(1,1)=1
+                inputs: vec![true, true], // AND(1,1)=1
                 outputs: vec![true],
             },
             LutEval {
                 lut_id: 1,
-                inputs: vec![true, false],  // XOR(1,0)=1
+                inputs: vec![true, false], // XOR(1,0)=1
                 outputs: vec![true],
             },
         ]
@@ -1463,7 +1459,10 @@ mod tests {
         let _init = DoryGlobals::initialize(k_chunk, t_total);
 
         let params = OneHotParams::new(2, 2, 4);
-        assert_eq!(params.d, 1, "expected 1 chunk for 3-bit address with log_k_chunk=4");
+        assert_eq!(
+            params.d, 1,
+            "expected 1 chunk for 3-bit address with log_k_chunk=4"
+        );
 
         let trace = basic_trace();
         let type_map = basic_type_map();
@@ -1522,14 +1521,23 @@ mod tests {
         assert_eq!(expected_addr, 362);
 
         // Verify each chunk
-        assert_eq!(witnesses[0].nonzero_indices[0], Some(address_chunk(362, 0, 4))); // =10
-        assert_eq!(witnesses[1].nonzero_indices[0], Some(address_chunk(362, 1, 4))); // =6
-        assert_eq!(witnesses[2].nonzero_indices[0], Some(address_chunk(362, 2, 4))); // =1
+        assert_eq!(
+            witnesses[0].nonzero_indices[0],
+            Some(address_chunk(362, 0, 4))
+        ); // =10
+        assert_eq!(
+            witnesses[1].nonzero_indices[0],
+            Some(address_chunk(362, 1, 4))
+        ); // =6
+        assert_eq!(
+            witnesses[2].nonzero_indices[0],
+            Some(address_chunk(362, 2, 4))
+        ); // =1
 
         // Explicit values
         assert_eq!(witnesses[0].nonzero_indices[0], Some(10u8)); // 0b1010
-        assert_eq!(witnesses[1].nonzero_indices[0], Some(6u8));  // 0b0110
-        assert_eq!(witnesses[2].nonzero_indices[0], Some(1u8));  // 0b0001
+        assert_eq!(witnesses[1].nonzero_indices[0], Some(6u8)); // 0b0110
+        assert_eq!(witnesses[2].nonzero_indices[0], Some(1u8)); // 0b0001
 
         // Padded rows
         for j in 1..t_total {
@@ -1546,7 +1554,8 @@ mod tests {
         let _init = DoryGlobals::initialize(k_chunk, t_total);
 
         let params = OneHotParams::new(2, 2, 4);
-        let witnesses = build_shout_witnesses(&[], &std::collections::HashMap::new(), 2, &params, t_total);
+        let witnesses =
+            build_shout_witnesses(&[], &std::collections::HashMap::new(), 2, &params, t_total);
         assert_eq!(witnesses.len(), 1);
         assert!(witnesses[0].nonzero_indices.iter().all(|x| x.is_none()));
     }
@@ -1558,7 +1567,11 @@ mod tests {
         for log_k_chunk in 1usize..=6 {
             let _mask = (1usize << log_k_chunk) - 1;
             for addr in 0usize..256 {
-                let bits_needed = if addr == 0 { 1 } else { usize::BITS as usize - addr.leading_zeros() as usize };
+                let bits_needed = if addr == 0 {
+                    1
+                } else {
+                    usize::BITS as usize - addr.leading_zeros() as usize
+                };
                 let d = bits_needed.div_ceil(log_k_chunk);
                 let mut reconstructed = 0usize;
                 for i in 0..d {
@@ -1576,16 +1589,20 @@ mod tests {
 
     // Helper: mask for n bits.
     fn mask_usize(n: usize) -> usize {
-        if n >= usize::BITS as usize { usize::MAX } else { (1 << n) - 1 }
+        if n >= usize::BITS as usize {
+            usize::MAX
+        } else {
+            (1 << n) - 1
+        }
     }
 
     // ── Phase S3 / S4 tests ───────────────────────────────────────────────────
 
+    use crate::lut_czbc::{LutCirc, LutOp};
+    use ark_bn254::Bn254;
     use jolt_core::poly::commitment::commitment_scheme::CommitmentScheme;
     use jolt_core::poly::commitment::hyperkzg::HyperKZG;
     use jolt_core::transcripts::KeccakTranscript;
-    use crate::lut_czbc::{LutCirc, LutOp};
-    use ark_bn254::Bn254;
     use std::collections::HashMap;
 
     type PCS = HyperKZG<Bn254>;
@@ -1602,9 +1619,21 @@ mod tests {
             outputs: vec![3, 4],
             lut_types,
             ops: vec![
-                LutOp { lut_id: 0, dst_wire: 2, src_wires: vec![0, 1] }, // AND
-                LutOp { lut_id: 1, dst_wire: 3, src_wires: vec![0, 1] }, // XOR
-                LutOp { lut_id: 0, dst_wire: 4, src_wires: vec![0, 1] }, // AND again
+                LutOp {
+                    lut_id: 0,
+                    dst_wire: 2,
+                    src_wires: vec![0, 1],
+                }, // AND
+                LutOp {
+                    lut_id: 1,
+                    dst_wire: 3,
+                    src_wires: vec![0, 1],
+                }, // XOR
+                LutOp {
+                    lut_id: 0,
+                    dst_wire: 4,
+                    src_wires: vec![0, 1],
+                }, // AND again
             ],
             default_cycles: 1,
         }
@@ -1614,9 +1643,21 @@ mod tests {
     /// Three rows: AND(1,1), XOR(1,0), AND(0,1).
     fn two_type_trace() -> Vec<LutEval> {
         vec![
-            LutEval { lut_id: 0, inputs: vec![true, true],  outputs: vec![true]  }, // AND(1,1)=1
-            LutEval { lut_id: 1, inputs: vec![true, false], outputs: vec![true]  }, // XOR(1,0)=1
-            LutEval { lut_id: 0, inputs: vec![false, true], outputs: vec![false] }, // AND(0,1)=0
+            LutEval {
+                lut_id: 0,
+                inputs: vec![true, true],
+                outputs: vec![true],
+            }, // AND(1,1)=1
+            LutEval {
+                lut_id: 1,
+                inputs: vec![true, false],
+                outputs: vec![true],
+            }, // XOR(1,0)=1
+            LutEval {
+                lut_id: 0,
+                inputs: vec![false, true],
+                outputs: vec![false],
+            }, // AND(0,1)=0
         ]
     }
 
@@ -1633,21 +1674,28 @@ mod tests {
         let mut lut_types = HashMap::new();
         lut_types.insert(0u32, and_desc());
         let circ = LutCirc {
-            num_wires: 3, primary_inputs: vec![0, 1], registers: vec![],
-            outputs: vec![2], lut_types,
-            ops: vec![LutOp { lut_id: 0, dst_wire: 2, src_wires: vec![0, 1] }],
+            num_wires: 3,
+            primary_inputs: vec![0, 1],
+            registers: vec![],
+            outputs: vec![2],
+            lut_types,
+            ops: vec![LutOp {
+                lut_id: 0,
+                dst_wire: 2,
+                src_wires: vec![0, 1],
+            }],
             default_cycles: 1,
         };
         let type_order = vec![0u32];
         let alpha = Fr::one();
-        let mega = build_mega_table_batched(&circ.lut_types, &type_order, 2, alpha);
+        let mega = build_mega_table_batched(&circ, &type_order, 2, alpha);
         // t_pad=1, table_size=4, mega_size=4
         assert_eq!(mega.len(), 4);
         // AND truth table (LSB-first): [0, 0, 0, 1]
         assert_eq!(mega[0], Fr::zero()); // AND(0,0)=0
         assert_eq!(mega[1], Fr::zero()); // AND(1,0)=0
         assert_eq!(mega[2], Fr::zero()); // AND(0,1)=0
-        assert_eq!(mega[3], Fr::one());  // AND(1,1)=1
+        assert_eq!(mega[3], Fr::one()); // AND(1,1)=1
     }
 
     #[test]
@@ -1655,14 +1703,17 @@ mod tests {
         let circ = two_type_circ();
         let type_order = vec![0u32, 1u32];
         let alpha = fr(2); // alpha=2 for multi-output batching (m=1 so just identity)
-        let mega = build_mega_table_batched(&circ.lut_types, &type_order, 2, alpha);
+        let mega = build_mega_table_batched(&circ, &type_order, 2, alpha);
         // t_pad=2, table_size=4, mega_size=8
         assert_eq!(mega.len(), 8);
         // AND entries at [0..4]: [0, 0, 0, 1]
-        assert_eq!(mega[0], Fr::zero()); assert_eq!(mega[3], Fr::one());
+        assert_eq!(mega[0], Fr::zero());
+        assert_eq!(mega[3], Fr::one());
         // XOR entries at [4..8]: [0, 1, 1, 0]
-        assert_eq!(mega[4], Fr::zero()); assert_eq!(mega[5], Fr::one());
-        assert_eq!(mega[6], Fr::one());  assert_eq!(mega[7], Fr::zero());
+        assert_eq!(mega[4], Fr::zero());
+        assert_eq!(mega[5], Fr::one());
+        assert_eq!(mega[6], Fr::one());
+        assert_eq!(mega[7], Fr::zero());
     }
 
     // ── mle_eval_fr ─────────────────────────────────────────────────────────
@@ -1672,7 +1723,7 @@ mod tests {
         // For a 2-entry vector [a, b], MLE at (0)=a and (1)=b.
         let v = vec![fr(3), fr(7)];
         assert_eq!(mle_eval_fr(&v, &[Fr::zero()]), fr(3));
-        assert_eq!(mle_eval_fr(&v, &[Fr::one()]),  fr(7));
+        assert_eq!(mle_eval_fr(&v, &[Fr::one()]), fr(7));
     }
 
     #[test]
@@ -1685,12 +1736,15 @@ mod tests {
 
     // ── End-to-end prover + verifier ─────────────────────────────────────────
 
-    fn make_shout_srs(lut_types: &HashMap<u32, LutDesc>, trace_len: usize) -> (
+    fn make_shout_srs(
+        circ: &LutCirc,
+        trace_len: usize,
+    ) -> (
         jolt_core::poly::commitment::hyperkzg::HyperKZGProverKey<Bn254>,
         jolt_core::poly::commitment::hyperkzg::HyperKZGVerifierKey<Bn254>,
     ) {
-        let k = lut_types.values().map(|d| d.k).max().unwrap_or(0);
-        let n_types = lut_types.len();
+        let k = circ.lut_types.values().map(|d| d.k).max().unwrap_or(0);
+        let n_types = circ.lut_types.len();
         let max_vars = shout_max_num_vars(n_types, k, 1, trace_len);
         let pk = PCS::setup_prover(max_vars.max(1));
         let vk = PCS::setup_verifier(&pk);
@@ -1705,16 +1759,19 @@ mod tests {
         let k = 2usize;
         let t_total = trace.len().next_power_of_two().max(1); // = 4
 
-        let (pk, vk) = make_shout_srs(&circ.lut_types, trace.len());
+        let (pk, vk) = make_shout_srs(&circ, trace.len());
 
         // Prove.
         let mut pt = KeccakTranscript::new(b"shout-lut-test");
-        let proof = prove_shout_lut(&circ.lut_types, &trace, &type_index_of, k, t_total, &pk, &mut pt);
+        let proof = prove_shout_lut(&circ, &trace, &type_index_of, k, t_total, &pk, &mut pt);
 
         // Verify with a fresh transcript (same initialization).
         let mut vt = KeccakTranscript::new(b"shout-lut-test");
-        let ok = verify_shout_lut(&proof, &circ.lut_types, &vk, &mut vt);
-        assert!(ok, "shout prove+verify should succeed for valid two-type trace");
+        let ok = verify_shout_lut(&proof, &circ, &vk, &mut vt);
+        assert!(
+            ok,
+            "shout prove+verify should succeed for valid two-type trace"
+        );
     }
 
     #[test]
@@ -1723,27 +1780,44 @@ mod tests {
         let mut lut_types = HashMap::new();
         lut_types.insert(0u32, and_desc());
         let circ = LutCirc {
-            num_wires: 3, primary_inputs: vec![0, 1], registers: vec![],
-            outputs: vec![2], lut_types,
-            ops: vec![LutOp { lut_id: 0, dst_wire: 2, src_wires: vec![0, 1] }],
+            num_wires: 3,
+            primary_inputs: vec![0, 1],
+            registers: vec![],
+            outputs: vec![2],
+            lut_types,
+            ops: vec![LutOp {
+                lut_id: 0,
+                dst_wire: 2,
+                src_wires: vec![0, 1],
+            }],
             default_cycles: 2,
         };
         let trace = vec![
-            LutEval { lut_id: 0, inputs: vec![true, true],  outputs: vec![true]  },
-            LutEval { lut_id: 0, inputs: vec![false, true], outputs: vec![false] },
+            LutEval {
+                lut_id: 0,
+                inputs: vec![true, true],
+                outputs: vec![true],
+            },
+            LutEval {
+                lut_id: 0,
+                inputs: vec![false, true],
+                outputs: vec![false],
+            },
         ];
         let type_index_of: HashMap<u32, usize> = [(0, 0)].into_iter().collect();
         let k = 2usize;
         let t_total = trace.len().next_power_of_two().max(1); // = 2
 
-        let (pk, vk) = make_shout_srs(&circ.lut_types, trace.len());
+        let (pk, vk) = make_shout_srs(&circ, trace.len());
 
         let mut pt = KeccakTranscript::new(b"shout-single");
-        let proof = prove_shout_lut(&circ.lut_types, &trace, &type_index_of, k, t_total, &pk, &mut pt);
+        let proof = prove_shout_lut(&circ, &trace, &type_index_of, k, t_total, &pk, &mut pt);
 
         let mut vt = KeccakTranscript::new(b"shout-single");
-        assert!(verify_shout_lut(&proof, &circ.lut_types, &vk, &mut vt),
-            "single-type shout proof should verify");
+        assert!(
+            verify_shout_lut(&proof, &circ, &vk, &mut vt),
+            "single-type shout proof should verify"
+        );
     }
 
     #[test]
@@ -1754,10 +1828,10 @@ mod tests {
         let k = 2usize;
         let t_total = trace.len().next_power_of_two().max(1);
 
-        let (pk, vk) = make_shout_srs(&circ.lut_types, trace.len());
+        let (pk, vk) = make_shout_srs(&circ, trace.len());
 
         let mut pt = KeccakTranscript::new(b"shout-tamper-cy");
-        let mut proof = prove_shout_lut(&circ.lut_types, &trace, &type_index_of, k, t_total, &pk, &mut pt);
+        let mut proof = prove_shout_lut(&circ, &trace, &type_index_of, k, t_total, &pk, &mut pt);
 
         // Corrupt the first cycle-sumcheck round polynomial.
         if let Some(p) = proof.cycle_sc_polys.first_mut() {
@@ -1765,8 +1839,10 @@ mod tests {
         }
 
         let mut vt = KeccakTranscript::new(b"shout-tamper-cy");
-        assert!(!verify_shout_lut(&proof, &circ.lut_types, &vk, &mut vt),
-            "tampered cycle sumcheck should fail verification");
+        assert!(
+            !verify_shout_lut(&proof, &circ, &vk, &mut vt),
+            "tampered cycle sumcheck should fail verification"
+        );
     }
 
     #[test]
@@ -1777,10 +1853,10 @@ mod tests {
         let k = 2usize;
         let t_total = trace.len().next_power_of_two().max(1);
 
-        let (pk, vk) = make_shout_srs(&circ.lut_types, trace.len());
+        let (pk, vk) = make_shout_srs(&circ, trace.len());
 
         let mut pt = KeccakTranscript::new(b"shout-tamper-ad");
-        let mut proof = prove_shout_lut(&circ.lut_types, &trace, &type_index_of, k, t_total, &pk, &mut pt);
+        let mut proof = prove_shout_lut(&circ, &trace, &type_index_of, k, t_total, &pk, &mut pt);
 
         // Corrupt the first address-sumcheck round polynomial.
         if let Some(p) = proof.addr_sc_polys.first_mut() {
@@ -1788,7 +1864,9 @@ mod tests {
         }
 
         let mut vt = KeccakTranscript::new(b"shout-tamper-ad");
-        assert!(!verify_shout_lut(&proof, &circ.lut_types, &vk, &mut vt),
-            "tampered addr sumcheck should fail verification");
+        assert!(
+            !verify_shout_lut(&proof, &circ, &vk, &mut vt),
+            "tampered addr sumcheck should fail verification"
+        );
     }
 }

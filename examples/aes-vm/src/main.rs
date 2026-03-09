@@ -27,12 +27,12 @@ pub fn main() {
 
     // Example plaintext and key
     let plaintext: [u8; 16] = [
-        0x32, 0x43, 0xf6, 0xa8, 0x88, 0x5a, 0x30, 0x8d,
-        0x31, 0x31, 0x98, 0xa2, 0xe0, 0x37, 0x07, 0x34
+        0x32, 0x43, 0xf6, 0xa8, 0x88, 0x5a, 0x30, 0x8d, 0x31, 0x31, 0x98, 0xa2, 0xe0, 0x37, 0x07,
+        0x34,
     ];
     let key: [u8; 16] = [
-        0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
-        0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c
+        0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f,
+        0x3c,
     ];
 
     info!("Input plaintext: {}", hex::encode(plaintext));
@@ -45,13 +45,23 @@ pub fn main() {
     let (ciphertext, proof, program_io) = prove_aes_encrypt(plaintext, key, aes_count);
     let prove_time = prove_start.elapsed();
     info!("✓ Prover time: {:.3} seconds", prove_time.as_secs_f64());
-    info!("✓ Time per AES: {:.6} seconds", prove_time.as_secs_f64() / aes_count as f64);
+    info!(
+        "✓ Time per AES: {:.6} seconds",
+        prove_time.as_secs_f64() / aes_count as f64
+    );
     info!("");
 
     // Verification phase
     info!("Starting proof verification...");
     let verify_start = Instant::now();
-    let is_valid = verify_aes_encrypt(plaintext, key, aes_count, ciphertext, program_io.panic, proof);
+    let is_valid = verify_aes_encrypt(
+        plaintext,
+        key,
+        aes_count,
+        ciphertext,
+        program_io.panic,
+        proof,
+    );
     let verify_time = verify_start.elapsed();
     info!("✓ Verifier time: {:.3} seconds", verify_time.as_secs_f64());
     info!("");
@@ -63,5 +73,8 @@ pub fn main() {
     info!("=== Performance Summary ===");
     info!("Prover time:   {:.3}s", prove_time.as_secs_f64());
     info!("Verifier time: {:.3}s", verify_time.as_secs_f64());
-    info!("Total time:    {:.3}s", (prove_time + verify_time).as_secs_f64());
+    info!(
+        "Total time:    {:.3}s",
+        (prove_time + verify_time).as_secs_f64()
+    );
 }
